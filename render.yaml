@@ -8,6 +8,7 @@ services:
   - type: web
     name: linebot-finance
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 60
     envVars:
@@ -23,5 +24,5 @@ services:
         fromDatabase:
           name: finance-db
           property: connectionString
-      - key: SELF_URL
-        sync: false   # 填入你的 Render 網址，例如 https://linebot-finance.onrender.com
+      # RENDER_EXTERNAL_URL is automatically injected by Render as
+      # https://<service-name>.onrender.com — no manual config needed

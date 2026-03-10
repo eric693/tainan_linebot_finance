@@ -3,7 +3,7 @@ import secrets
 import threading
 import time
 import urllib.request
-from datetime import datetime, date
+from datetime import date
 from functools import wraps
 
 import psycopg
@@ -26,6 +26,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', '')
 LINE_CHANNEL_SECRET       = os.environ.get('LINE_CHANNEL_SECRET', '')
 ADMIN_PASSWORD            = os.environ.get('ADMIN_PASSWORD', 'admin123')
 DATABASE_URL              = os.environ.get('DATABASE_URL', '')
+# Render automatically injects RENDER_EXTERNAL_URL as https://<name>.onrender.com
 RENDER_EXTERNAL_URL       = os.environ.get('RENDER_EXTERNAL_URL', '')
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
@@ -57,27 +58,36 @@ def get_db():
 
 
 def init_db():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS records (
-                id                  SERIAL PRIMARY KEY,
-                record_date         DATE NOT NULL UNIQUE,
-                breakfast_total     NUMERIC(12,2) DEFAULT 0,
-                breakfast_cash      NUMERIC(12,2) DEFAULT 0,
-                breakfast_card      NUMERIC(12,2) DEFAULT 0,
-                breakfast_linepay   NUMERIC(12,2) DEFAULT 0,
-                breakfast_transfer  NUMERIC(12,2) DEFAULT 0,
-                counter_expense     NUMERIC(12,2) DEFAULT 0,
-                panda               NUMERIC(12,2) DEFAULT 0,
-                ubereats            NUMERIC(12,2) DEFAULT 0,
-                tips                NUMERIC(12,2) DEFAULT 0,
-                surplus             NUMERIC(12,2) DEFAULT 0,
-                pos_total           NUMERIC(12,2) DEFAULT 0,
-                total_income        NUMERIC(12,2) DEFAULT 0,
-                created_at          TIMESTAMPTZ DEFAULT NOW(),
-                updated_at          TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
+    """Create tables if they don't exist. Called once at startup."""
+    if not DATABASE_URL:
+        print("[WARNING] DATABASE_URL is not set — skipping init_db()")
+        return
+    try:
+        with get_db() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS records (
+                    id                  SERIAL PRIMARY KEY,
+                    record_date         DATE NOT NULL UNIQUE,
+                    breakfast_total     NUMERIC(12,2) DEFAULT 0,
+                    breakfast_cash      NUMERIC(12,2) DEFAULT 0,
+                    breakfast_card      NUMERIC(12,2) DEFAULT 0,
+                    breakfast_linepay   NUMERIC(12,2) DEFAULT 0,
+                    breakfast_transfer  NUMERIC(12,2) DEFAULT 0,
+                    counter_expense     NUMERIC(12,2) DEFAULT 0,
+                    panda               NUMERIC(12,2) DEFAULT 0,
+                    ubereats            NUMERIC(12,2) DEFAULT 0,
+                    tips                NUMERIC(12,2) DEFAULT 0,
+                    surplus             NUMERIC(12,2) DEFAULT 0,
+                    pos_total           NUMERIC(12,2) DEFAULT 0,
+                    total_income        NUMERIC(12,2) DEFAULT 0,
+                    created_at          TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at          TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+        print("[OK] Database initialised successfully")
+    except Exception as e:
+        print(f"[ERROR] init_db failed: {e}")
+        raise
 
 
 def row_to_dict(row):
@@ -119,8 +129,10 @@ def make_start_flex():
             "type": "box", "layout": "vertical",
             "backgroundColor": "#1a2744", "paddingAll": "20px",
             "contents": [
-                {"type": "text", "text": "財務記帳系統", "color": "#ffffff", "size": "xl", "weight": "bold"},
-                {"type": "text", "text": "請選擇要記帳的日期", "color": "#9eb3d8", "size": "sm", "margin": "sm"}
+                {"type": "text", "text": "財務記帳系統", "color": "#ffffff",
+                 "size": "xl", "weight": "bold"},
+                {"type": "text", "text": "請選擇要記帳的日期", "color": "#9eb3d8",
+                 "size": "sm", "margin": "sm"}
             ]
         },
         "body": {
@@ -150,8 +162,10 @@ def make_field_flex(record_date, record=None):
             cols.append({
                 "type": "box", "layout": "vertical", "flex": 1, "spacing": "xs",
                 "contents": [
-                    {"type": "text", "text": f['label'], "size": "xs", "color": "#666666", "wrap": True},
-                    {"type": "text", "text": val_text(f['key']), "size": "sm", "weight": "bold",
+                    {"type": "text", "text": f['label'], "size": "xs",
+                     "color": "#666666", "wrap": True},
+                    {"type": "text", "text": val_text(f['key']), "size": "sm",
+                     "weight": "bold",
                      "color": "#c0392b" if f['subtract'] else "#1a2744"},
                     {"type": "button", "action": {
                         "type": "postback", "label": "輸入",
@@ -161,8 +175,10 @@ def make_field_flex(record_date, record=None):
             })
         if len(pair) == 1:
             cols.append({"type": "box", "layout": "vertical", "flex": 1, "contents": []})
-        rows.append({"type": "box", "layout": "horizontal",
-                     "spacing": "md", "margin": "md", "contents": cols})
+        rows.append({
+            "type": "box", "layout": "horizontal",
+            "spacing": "md", "margin": "md", "contents": cols
+        })
 
     total = calculate_total(record)
     rows += [
@@ -201,17 +217,20 @@ def make_confirm_flex(record_date, field_label, amount, record=None):
         "body": {
             "type": "box", "layout": "vertical", "paddingAll": "20px",
             "contents": [
-                {"type": "text", "text": "記帳成功", "weight": "bold", "size": "lg", "color": "#1a2744"},
+                {"type": "text", "text": "記帳成功", "weight": "bold",
+                 "size": "lg", "color": "#1a2744"},
                 {"type": "separator", "margin": "md"},
                 {"type": "box", "layout": "horizontal", "margin": "md", "contents": [
-                    {"type": "text", "text": field_label, "size": "sm", "color": "#666666", "flex": 1},
-                    {"type": "text", "text": f"${int(amount):,}", "size": "sm", "weight": "bold",
-                     "color": "#1a2744", "align": "end", "flex": 1}
+                    {"type": "text", "text": field_label, "size": "sm",
+                     "color": "#666666", "flex": 1},
+                    {"type": "text", "text": f"${int(amount):,}", "size": "sm",
+                     "weight": "bold", "color": "#1a2744", "align": "end", "flex": 1}
                 ]},
                 {"type": "box", "layout": "horizontal", "margin": "sm", "contents": [
-                    {"type": "text", "text": "當日總收入", "size": "sm", "color": "#666666", "flex": 1},
-                    {"type": "text", "text": f"${int(total):,}", "size": "sm", "weight": "bold",
-                     "color": "#1a2744", "align": "end", "flex": 1}
+                    {"type": "text", "text": "當日總收入", "size": "sm",
+                     "color": "#666666", "flex": 1},
+                    {"type": "text", "text": f"${int(total):,}", "size": "sm",
+                     "weight": "bold", "color": "#1a2744", "align": "end", "flex": 1}
                 ]},
                 {"type": "separator", "margin": "md"},
                 {"type": "button", "margin": "md",
@@ -237,7 +256,8 @@ def make_summary_flex(record_date, record):
         rows.append({
             "type": "box", "layout": "horizontal", "margin": "sm",
             "contents": [
-                {"type": "text", "text": f['label'], "size": "sm", "color": "#666666", "flex": 2},
+                {"type": "text", "text": f['label'], "size": "sm",
+                 "color": "#666666", "flex": 2},
                 {"type": "text",
                  "text": f"-${int(val):,}" if f['subtract'] else f"${int(val):,}",
                  "size": "sm", "weight": "bold",
@@ -305,15 +325,19 @@ def update_record_field(record_date, field_key, amount):
 # ─── Keep-Alive ───────────────────────────────────────────────────────────────
 
 def keep_alive():
-    time.sleep(60)
+    """Ping /health every 14 minutes to prevent Render free-tier sleep."""
+    time.sleep(60)  # wait for app to fully start
     while True:
         try:
-            base = (RENDER_EXTERNAL_URL or 'http://localhost:5000').rstrip('/')
-            req  = urllib.request.Request(
-                f'{base}/health',
-                headers={'User-Agent': 'KeepAlive/1.0'}
+            # RENDER_EXTERNAL_URL is auto-injected by Render: https://<name>.onrender.com
+            base = RENDER_EXTERNAL_URL.rstrip('/') if RENDER_EXTERNAL_URL else 'http://localhost:5000'
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    f'{base}/health',
+                    headers={'User-Agent': 'KeepAlive/1.0'}
+                ),
+                timeout=10
             )
-            urllib.request.urlopen(req, timeout=10)
         except Exception:
             pass
         time.sleep(14 * 60)
@@ -321,7 +345,7 @@ def keep_alive():
 
 threading.Thread(target=keep_alive, daemon=True).start()
 
-# ─── Health ───────────────────────────────────────────────────────────────────
+# ─── Health Check ─────────────────────────────────────────────────────────────
 
 @app.route('/health')
 def health():
@@ -362,6 +386,7 @@ def handle_message(event):
                 TextSendMessage(text="請輸入有效的數字金額，例如：1500")
             )
             return
+
         record_date = state['date']
         field_key   = state['field']
         field_label = FIELD_MAP[field_key]['label']
