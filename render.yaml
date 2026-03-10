@@ -1,3 +1,9 @@
+databases:
+  - name: finance-db
+    databaseName: finance
+    user: finance_user
+    plan: free
+
 services:
   - type: web
     name: linebot-finance
@@ -13,5 +19,9 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
-      - key: DB_PATH
-        value: /opt/render/project/src/finance.db
+      - key: DATABASE_URL
+        fromDatabase:
+          name: finance-db
+          property: connectionString
+      - key: SELF_URL
+        sync: false   # 填入你的 Render 網址，例如 https://linebot-finance.onrender.com
