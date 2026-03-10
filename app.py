@@ -2,6 +2,7 @@ import os
 import secrets
 import threading
 import time
+import traceback
 import urllib.request
 from datetime import date
 from functools import wraps
@@ -25,9 +26,13 @@ app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', '')
 LINE_CHANNEL_SECRET       = os.environ.get('LINE_CHANNEL_SECRET', '')
 ADMIN_PASSWORD            = os.environ.get('ADMIN_PASSWORD', 'admin123')
-DATABASE_URL              = os.environ.get('DATABASE_URL', '')
-# Render automatically injects RENDER_EXTERNAL_URL as https://<name>.onrender.com
+_raw_db_url               = os.environ.get('DATABASE_URL', '')
+# Render issues postgres:// scheme — psycopg3 requires postgresql://
+DATABASE_URL              = _raw_db_url.replace('postgres://', 'postgresql://', 1) if _raw_db_url.startswith('postgres://') else _raw_db_url
+# Render automatically injects RENDER_EXTERNAL_URL as https://<n>.onrender.com
 RENDER_EXTERNAL_URL       = os.environ.get('RENDER_EXTERNAL_URL', '')
+
+print(f"[startup] DATABASE_URL prefix: {DATABASE_URL[:20] if DATABASE_URL else 'NOT SET'}")
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler      = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -424,7 +429,7 @@ def handle_message(event):
                 )
             )
         except Exception as e:
-            print(f"[ERROR] update_record_field: {e}")
+            print(f"[ERROR] update_record_field: {e}\n{traceback.format_exc()}")
             clear_state(uid)
             line_bot_api.reply_message(
                 event.reply_token,
@@ -486,7 +491,7 @@ def handle_postback(event):
             )
 
     except Exception as e:
-        print(f"[ERROR] handle_postback action={action}: {e}")
+        print(f"[ERROR] handle_postback action={action}: {e}\n{traceback.format_exc()}")
         try:
             line_bot_api.reply_message(
                 event.reply_token,
