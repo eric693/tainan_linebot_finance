@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>財務後台管理系統</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --navy: #0f1c3a;
+  --navy-mid: #1a2d58;
+  --navy-light: #243d6e;
+  --accent: #4a7bda;
+  --accent-light: #eef3fd;
+  --gold: #c8a96e;
+  --bg: #f0f2f8;
+  --surface: #ffffff;
+  --text: #1e2a45;
+  --muted: #8892a4;
+  --border: #dde3ef;
+  --red: #d64242;
+  --red-light: #fdf0f0;
+  --green: #2e9e6b;
+  --green-light: #edfaf4;
+  --sidebar-w: 220px;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: 'Noto Sans TC', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--navy);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: fixed;
+  left: 0; top: 0;
+  z-index: 100;
+}
+
+.sidebar-brand {
+  padding: 28px 24px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+
+.sidebar-brand-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.04em;
+}
+
+.sidebar-brand-sub {
+  font-size: 10px;
+  color: rgba(255,255,255,0.35);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+
+.sidebar-brand-bar {
+  width: 24px;
+  height: 2px;
+  background: var(--gold);
+  margin-top: 10px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 20px 0;
+}
+
+.nav-label {
+  font-size: 10px;
+  color: rgba(255,255,255,0.3);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0 24px;
+  margin-bottom: 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.6);
+  cursor: pointer;
+  transition: all 0.15s;
+  border-left: 3px solid transparent;
+  text-decoration: none;
+}
+
+.nav-item:hover, .nav-item.active {
+  color: #fff;
+  background: rgba(255,255,255,0.06);
+  border-left-color: var(--gold);
+}
+
+.sidebar-bottom {
+  padding: 16px 24px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+
+.logout-btn {
+  font-size: 12px;
+  color: rgba(255,255,255,0.4);
+  cursor: pointer;
+  text-decoration: none;
+  letter-spacing: 0.05em;
+  transition: color 0.15s;
+}
+.logout-btn:hover { color: rgba(255,255,255,0.8); }
+
+/* ── Main ── */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.topbar-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--navy);
+  letter-spacing: 0.03em;
+}
+
+.topbar-actions { display: flex; gap: 10px; align-items: center; }
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 7px;
+  font-family: 'Noto Sans TC', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+  letter-spacing: 0.03em;
+}
+
+.btn-primary {
+  background: var(--navy);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--navy-light); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--navy);
+  border: 1.5px solid var(--border);
+}
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+}
+.btn-danger:hover { background: #c03636; }
+
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* ── Page Content ── */
+.page { padding: 28px 32px; flex: 1; }
+
+/* ── Stats Row ── */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 20px 24px;
+  border: 1px solid var(--border);
+}
+
+.stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.stat-value {
+  font-family: 'DM Mono', monospace;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--navy);
+}
+
+.stat-value.negative { color: var(--red); }
+.stat-value.positive { color: var(--green); }
+
+/* ── Table ── */
+.card {
+  background: var(--surface);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.table-wrap { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+thead th {
+  background: #f7f9fd;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 11px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+tbody tr {
+  border-bottom: 1px solid #f0f2f8;
+  transition: background 0.12s;
+  cursor: pointer;
+}
+tbody tr:hover { background: #f7f9fd; }
+tbody tr:last-child { border-bottom: none; }
+
+tbody td {
+  padding: 12px 16px;
+  color: var(--text);
+  white-space: nowrap;
+  font-family: 'DM Mono', monospace;
+  font-size: 13px;
+}
+
+tbody td.date-cell {
+  font-family: 'Noto Sans TC', sans-serif;
+  font-weight: 500;
+}
+
+.badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: 'Noto Sans TC', sans-serif;
+}
+
+.badge-green { background: var(--green-light); color: var(--green); }
+.badge-red   { background: var(--red-light);   color: var(--red);   }
+
+.action-btns { display: flex; gap: 6px; }
+
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10,20,45,0.55);
+  backdrop-filter: blur(2px);
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: var(--surface);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 680px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.25);
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 300;
+  transition: all 0.15s;
+  background: none;
+  border: none;
+}
+.modal-close:hover { background: var(--bg); color: var(--text); }
+
+.modal-body {
+  padding: 24px 28px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-footer {
+  padding: 16px 28px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+  background: #fafbfd;
+}
+
+/* ── Form ── */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group.full-width { grid-column: 1 / -1; }
+
+.form-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.form-label .subtract-tag {
+  color: var(--red);
+  margin-left: 4px;
+  font-size: 10px;
+}
+
+.form-input {
+  padding: 10px 13px;
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  font-family: 'DM Mono', monospace;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74,123,218,0.1);
+  background: var(--surface);
+}
+
+.total-preview {
+  background: var(--navy);
+  color: var(--white);
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.total-preview-label {
+  font-size: 12px;
+  color: rgba(255,255,255,0.55);
+  letter-spacing: 0.06em;
+}
+
+.total-preview-value {
+  font-family: 'DM Mono', monospace;
+  font-size: 22px;
+  font-weight: 500;
+  color: #fff;
+}
+
+/* ── Section divider ── */
+.form-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  grid-column: 1 / -1;
+}
+
+/* ── Toast ── */
+.toast-wrap {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  padding: 12px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  animation: toastIn 0.25s ease;
+  min-width: 200px;
+}
+
+.toast-success { background: var(--green); color: #fff; }
+.toast-error   { background: var(--red);   color: #fff; }
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Empty State ── */
+.empty-state {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--muted);
+}
+
+.empty-state-text {
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+/* ── Confirm Dialog ── */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10,20,45,0.55);
+  backdrop-filter: blur(2px);
+  z-index: 300;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.confirm-overlay.open { display: flex; }
+
+.confirm-box {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 28px 32px;
+  max-width: 360px;
+  width: 90%;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.2);
+  text-align: center;
+}
+
+.confirm-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--navy);
+  margin-bottom: 8px;
+}
+
+.confirm-msg {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 24px;
+  line-height: 1.6;
+}
+
+.confirm-actions { display: flex; gap: 10px; justify-content: center; }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; }
+  .stats-row { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+  .page { padding: 16px; }
+}
+
+/* ── Search ── */
+.search-box {
+  padding: 8px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  font-family: 'Noto Sans TC', sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  outline: none;
+  width: 200px;
+  transition: border-color 0.15s;
+}
+.search-box:focus { border-color: var(--accent); background: #fff; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c8d0e0; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #a0abbe; }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="sidebar-brand-title">財務管理後台</div>
+    <div class="sidebar-brand-sub">Finance System</div>
+    <div class="sidebar-brand-bar"></div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-label">功能選單</div>
+    <a href="#" class="nav-item active" onclick="showPage('records')">每日記帳</a>
+    <a href="#" class="nav-item" onclick="showPage('summary')">總覽統計</a>
+  </nav>
+  <div class="sidebar-bottom">
+    <a href="/admin/logout" class="logout-btn">登出系統</a>
+  </div>
+</aside>
+
+<!-- Main -->
+<main class="main">
+  <header class="topbar">
+    <span class="topbar-title" id="page-title">每日記帳</span>
+    <div class="topbar-actions">
+      <input class="search-box" type="text" placeholder="搜尋日期 yyyy-mm-dd" id="search-input" oninput="filterTable()" style="display:none">
+      <button class="btn btn-primary" id="new-btn" onclick="openNewModal()">新增記錄</button>
+    </div>
+  </header>
+
+  <!-- Records Page -->
+  <div class="page" id="page-records">
+    <div class="stats-row" id="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">記帳天數</div>
+        <div class="stat-value" id="stat-days">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">累計總收入</div>
+        <div class="stat-value" id="stat-total">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">日均收入</div>
+        <div class="stat-value" id="stat-avg">--</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">記帳明細</span>
+        <input class="search-box" type="text" placeholder="搜尋日期" id="search-input2" oninput="filterTable2()">
+      </div>
+      <div class="table-wrap">
+        <table id="records-table">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>早餐點收</th>
+              <th>現金</th>
+              <th>刷卡合庫</th>
+              <th>LINE Pay</th>
+              <th>轉帳</th>
+              <th>櫃檯支出</th>
+              <th>熊貓</th>
+              <th>Uber Eats</th>
+              <th>小費</th>
+              <th>溢收</th>
+              <th>POS機總額</th>
+              <th>總收入</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="records-tbody">
+            <tr><td colspan="14" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary Page -->
+  <div class="page" id="page-summary" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">各欄位加總統計</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>欄位名稱</th>
+              <th>加總金額</th>
+              <th>類型</th>
+            </tr>
+          </thead>
+          <tbody id="summary-tbody">
+            <tr><td colspan="3" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- New/Edit Modal -->
+<div class="modal-overlay" id="record-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">新增記帳記錄</span>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid" id="form-grid">
+
+        <div class="form-section-title">日期</div>
+        <div class="form-group full-width">
+          <label class="form-label">記帳日期</label>
+          <input class="form-input" type="date" id="f-record_date">
+        </div>
+
+        <div class="form-section-title">早餐收入</div>
+        <div class="form-group">
+          <label class="form-label">早餐點收</label>
+          <input class="form-input" type="number" id="f-breakfast_total" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">早餐餐-現金</label>
+          <input class="form-input" type="number" id="f-breakfast_cash" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">早餐餐-刷卡合庫</label>
+          <input class="form-input" type="number" id="f-breakfast_card" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">早餐餐-LINE Pay</label>
+          <input class="form-input" type="number" id="f-breakfast_linepay" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group full-width">
+          <label class="form-label">早餐餐-轉帳</label>
+          <input class="form-input" type="number" id="f-breakfast_transfer" placeholder="0" oninput="updateTotal()">
+        </div>
+
+        <div class="form-section-title">支出 / 其他收入</div>
+        <div class="form-group">
+          <label class="form-label">櫃檯支出 <span class="subtract-tag">(扣除)</span></label>
+          <input class="form-input" type="number" id="f-counter_expense" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">熊貓</label>
+          <input class="form-input" type="number" id="f-panda" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Uber Eats</label>
+          <input class="form-input" type="number" id="f-ubereats" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">小費</label>
+          <input class="form-input" type="number" id="f-tips" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">溢收</label>
+          <input class="form-input" type="number" id="f-surplus" placeholder="0" oninput="updateTotal()">
+        </div>
+        <div class="form-group">
+          <label class="form-label">POS機總額</label>
+          <input class="form-input" type="number" id="f-pos_total" placeholder="0" oninput="updateTotal()">
+        </div>
+
+        <div class="form-group full-width">
+          <div class="total-preview">
+            <span class="total-preview-label">預估總收入</span>
+            <span class="total-preview-value" id="preview-total">$0</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveRecord()">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Dialog -->
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <div class="confirm-title">確認刪除</div>
+    <div class="confirm-msg" id="confirm-msg">確定要刪除此筆記錄嗎？此操作無法復原。</div>
+    <div class="confirm-actions">
+      <button class="btn btn-outline" onclick="closeConfirm()">取消</button>
+      <button class="btn btn-danger" onclick="confirmDelete()">確認刪除</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-wrap" id="toast-wrap"></div>
+
+<script>
+const FIELDS = {{ fields | tojson }};
+const FIELD_KEYS = FIELDS.map(f => f.key);
+const SUBTRACT_KEYS = FIELDS.filter(f => f.subtract).map(f => f.key);
+
+let allRecords = [];
+let editingDate = null;
+let deleteTarget = null;
+
+// ── Page navigation ──────────────────────────────────────────
+function showPage(page) {
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  event.target.classList.add('active');
+
+  if (page === 'records') {
+    document.getElementById('page-records').style.display = '';
+    document.getElementById('page-summary').style.display  = 'none';
+    document.getElementById('page-title').textContent = '每日記帳';
+    document.getElementById('new-btn').style.display = '';
+    loadRecords();
+  } else {
+    document.getElementById('page-records').style.display = 'none';
+    document.getElementById('page-summary').style.display  = '';
+    document.getElementById('page-title').textContent = '總覽統計';
+    document.getElementById('new-btn').style.display = 'none';
+    loadSummary();
+  }
+}
+
+// ── Data loading ──────────────────────────────────────────────
+async function loadRecords() {
+  try {
+    const res = await fetch('/api/records');
+    allRecords = await res.json();
+    renderTable(allRecords);
+    loadStats();
+  } catch (e) {
+    showToast('載入失敗', 'error');
+  }
+}
+
+async function loadStats() {
+  try {
+    const res = await fetch('/api/summary');
+    const data = await res.json();
+    document.getElementById('stat-days').textContent  = data.days || 0;
+    document.getElementById('stat-total').textContent = '$' + fmt(data.total || 0);
+    document.getElementById('stat-avg').textContent   = '$' + fmt(Math.round(data.avg_daily || 0));
+  } catch (e) {}
+}
+
+async function loadSummary() {
+  try {
+    const res = await fetch('/api/records');
+    const records = await res.json();
+    const totals = {};
+    FIELDS.forEach(f => totals[f.key] = 0);
+    records.forEach(r => {
+      FIELDS.forEach(f => { totals[f.key] += parseFloat(r[f.key] || 0); });
+    });
+    const tbody = document.getElementById('summary-tbody');
+    if (FIELDS.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#aaa;padding:40px">無資料</td></tr>';
+      return;
+    }
+    tbody.innerHTML = FIELDS.map(f => {
+      const v = totals[f.key];
+      const sign = f.subtract ? '-' : '+';
+      const cls  = f.subtract ? 'badge-red' : 'badge-green';
+      const label = f.subtract ? '支出 (扣除)' : '收入 (加計)';
+      return `<tr>
+        <td class="date-cell">${f.label}</td>
+        <td>${sign}$${fmt(v)}</td>
+        <td><span class="badge ${cls}">${label}</span></td>
+      </tr>`;
+    }).join('');
+  } catch (e) {}
+}
+
+// ── Table rendering ───────────────────────────────────────────
+function renderTable(records) {
+  const tbody = document.getElementById('records-tbody');
+  if (!records.length) {
+    tbody.innerHTML = '<tr><td colspan="14"><div class="empty-state"><div class="empty-state-text">尚無記帳資料，請新增第一筆記錄</div></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = records.map(r => {
+    const total = r.total_income || 0;
+    const cls   = total >= 0 ? 'badge-green' : 'badge-red';
+    return `<tr onclick="openEditModal('${r.record_date}')">
+      <td class="date-cell">${r.record_date}</td>
+      <td>${fmtCell(r.breakfast_total)}</td>
+      <td>${fmtCell(r.breakfast_cash)}</td>
+      <td>${fmtCell(r.breakfast_card)}</td>
+      <td>${fmtCell(r.breakfast_linepay)}</td>
+      <td>${fmtCell(r.breakfast_transfer)}</td>
+      <td style="color:var(--red)">${fmtCell(r.counter_expense)}</td>
+      <td>${fmtCell(r.panda)}</td>
+      <td>${fmtCell(r.ubereats)}</td>
+      <td>${fmtCell(r.tips)}</td>
+      <td>${fmtCell(r.surplus)}</td>
+      <td>${fmtCell(r.pos_total)}</td>
+      <td><span class="badge ${cls}">$${fmt(total)}</span></td>
+      <td onclick="event.stopPropagation()">
+        <div class="action-btns">
+          <button class="btn btn-outline btn-sm" onclick="openEditModal('${r.record_date}')">編輯</button>
+          <button class="btn btn-danger btn-sm" onclick="askDelete('${r.record_date}')">刪除</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function fmtCell(v) {
+  const n = parseFloat(v || 0);
+  return n ? '$' + fmt(n) : '<span style="color:#ccc">-</span>';
+}
+
+function fmt(n) {
+  return Math.round(n).toLocaleString('zh-TW');
+}
+
+function filterTable2() {
+  const q = document.getElementById('search-input2').value.trim().toLowerCase();
+  const filtered = allRecords.filter(r => r.record_date.includes(q));
+  renderTable(filtered);
+}
+
+// ── Modal ─────────────────────────────────────────────────────
+function openNewModal() {
+  editingDate = null;
+  document.getElementById('modal-title').textContent = '新增記帳記錄';
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('f-record_date').value = today;
+  document.getElementById('f-record_date').disabled = false;
+  FIELD_KEYS.forEach(k => {
+    const el = document.getElementById('f-' + k);
+    if (el) el.value = '';
+  });
+  updateTotal();
+  document.getElementById('record-modal').classList.add('open');
+}
+
+async function openEditModal(record_date) {
+  editingDate = record_date;
+  document.getElementById('modal-title').textContent = `編輯  ${record_date}`;
+  document.getElementById('f-record_date').value = record_date;
+  document.getElementById('f-record_date').disabled = true;
+
+  try {
+    const res = await fetch('/api/records/' + record_date);
+    const data = await res.json();
+    FIELD_KEYS.forEach(k => {
+      const el = document.getElementById('f-' + k);
+      if (el) el.value = parseFloat(data[k] || 0) || '';
+    });
+    updateTotal();
+    document.getElementById('record-modal').classList.add('open');
+  } catch (e) {
+    showToast('載入失敗', 'error');
+  }
+}
+
+function closeModal() {
+  document.getElementById('record-modal').classList.remove('open');
+  editingDate = null;
+}
+
+function updateTotal() {
+  let total = 0;
+  FIELDS.forEach(f => {
+    const el = document.getElementById('f-' + f.key);
+    const v  = parseFloat(el ? el.value : 0) || 0;
+    total += f.subtract ? -v : v;
+  });
+  document.getElementById('preview-total').textContent = '$' + fmt(total);
+}
+
+async function saveRecord() {
+  const record_date = document.getElementById('f-record_date').value;
+  if (!record_date) { showToast('請選擇日期', 'error'); return; }
+
+  const body = { record_date };
+  FIELD_KEYS.forEach(k => {
+    const el = document.getElementById('f-' + k);
+    body[k] = parseFloat(el ? el.value : 0) || 0;
+  });
+
+  try {
+    let res;
+    if (editingDate) {
+      res = await fetch('/api/records/' + editingDate, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+    } else {
+      res = await fetch('/api/records', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || '儲存失敗', 'error'); return; }
+    showToast(editingDate ? '更新成功' : '新增成功', 'success');
+    closeModal();
+    loadRecords();
+  } catch (e) {
+    showToast('網路錯誤', 'error');
+  }
+}
+
+// ── Delete ────────────────────────────────────────────────────
+function askDelete(record_date) {
+  deleteTarget = record_date;
+  document.getElementById('confirm-msg').textContent = `確定要刪除 ${record_date} 的記錄嗎？此操作無法復原。`;
+  document.getElementById('confirm-overlay').classList.add('open');
+}
+
+function closeConfirm() {
+  document.getElementById('confirm-overlay').classList.remove('open');
+  deleteTarget = null;
+}
+
+async function confirmDelete() {
+  if (!deleteTarget) return;
+  try {
+    await fetch('/api/records/' + deleteTarget, { method: 'DELETE' });
+    showToast('已刪除', 'success');
+    closeConfirm();
+    loadRecords();
+  } catch (e) {
+    showToast('刪除失敗', 'error');
+  }
+}
+
+// ── Toast ─────────────────────────────────────────────────────
+function showToast(msg, type = 'success') {
+  const wrap = document.getElementById('toast-wrap');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ── Close modal on overlay click ──────────────────────────────
+document.getElementById('record-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+document.getElementById('confirm-overlay').addEventListener('click', function(e) {
+  if (e.target === this) closeConfirm();
+});
+
+// ── Keyboard ──────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeModal(); closeConfirm(); }
+});
+
+// ── Init ──────────────────────────────────────────────────────
+loadRecords();
+</script>
+</body>
+</html>
