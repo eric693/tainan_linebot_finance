@@ -51,16 +51,15 @@ FIELDS = [
 FIELD_KEYS = [f['key'] for f in FIELDS]
 FIELD_MAP  = {f['key']: f for f in FIELDS}
 
-# ─── PostgreSQL (psycopg3) ────────────────────────────────────────────────────
+# ─── PostgreSQL ───────────────────────────────────────────────────────────────
 
 def get_db():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
 def init_db():
-    """Create tables if they don't exist. Called once at startup."""
     if not DATABASE_URL:
-        print("[WARNING] DATABASE_URL is not set — skipping init_db()")
+        print("[WARNING] DATABASE_URL not set — skipping init_db()")
         return
     try:
         with get_db() as conn:
@@ -84,7 +83,7 @@ def init_db():
                     updated_at          TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
-        print("[OK] Database initialised successfully")
+        print("[OK] Database initialised")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
         raise
@@ -112,13 +111,31 @@ def calculate_total(data: dict) -> float:
 
 init_db()
 
-# ─── User State (LINE Bot) ────────────────────────────────────────────────────
+# ─── User State with TTL ──────────────────────────────────────────────────────
+# Stored as { uid: { 'step': ..., 'date': ..., 'field': ..., 'ts': time() } }
+# Expires after 10 minutes so stale states don't block users after restarts.
 
-user_states: dict = {}
+_user_states: dict = {}
+STATE_TTL = 600  # 10 minutes
 
-def get_state(uid):    return user_states.get(uid, {})
-def set_state(uid, d): user_states[uid] = d
-def clear_state(uid):  user_states.pop(uid, None)
+
+def get_state(uid: str) -> dict:
+    entry = _user_states.get(uid)
+    if not entry:
+        return {}
+    if time.time() - entry.get('ts', 0) > STATE_TTL:
+        _user_states.pop(uid, None)
+        return {}
+    return entry
+
+
+def set_state(uid: str, data: dict):
+    data['ts'] = time.time()
+    _user_states[uid] = data
+
+
+def clear_state(uid: str):
+    _user_states.pop(uid, None)
 
 # ─── Flex Builders ────────────────────────────────────────────────────────────
 
@@ -274,7 +291,12 @@ def make_summary_flex(record_date, record):
             {"type": "text", "text": "總收入", "size": "lg", "weight": "bold", "flex": 1},
             {"type": "text", "text": f"${int(total):,}", "size": "lg", "weight": "bold",
              "color": "#1a2744", "align": "end", "flex": 1}
-        ]}
+        ]},
+        {"type": "separator", "margin": "md"},
+        {"type": "button", "margin": "md",
+         "action": {"type": "postback", "label": "繼續記帳",
+                    "data": f"action=continue&date={record_date}"},
+         "style": "secondary", "height": "sm"},
     ]
     return {
         "type": "bubble", "size": "kilo",
@@ -325,11 +347,10 @@ def update_record_field(record_date, field_key, amount):
 # ─── Keep-Alive ───────────────────────────────────────────────────────────────
 
 def keep_alive():
-    """Ping /health every 14 minutes to prevent Render free-tier sleep."""
-    time.sleep(60)  # wait for app to fully start
+    """Ping /health every 14 min to prevent Render free-tier sleep."""
+    time.sleep(10)  # short wait — just enough for gunicorn to bind
     while True:
         try:
-            # RENDER_EXTERNAL_URL is auto-injected by Render: https://<name>.onrender.com
             base = RENDER_EXTERNAL_URL.rstrip('/') if RENDER_EXTERNAL_URL else 'http://localhost:5000'
             urllib.request.urlopen(
                 urllib.request.Request(
@@ -338,8 +359,9 @@ def keep_alive():
                 ),
                 timeout=10
             )
-        except Exception:
-            pass
+            print(f"[keep-alive] pinged {base}/health")
+        except Exception as e:
+            print(f"[keep-alive] ping failed: {e}")
         time.sleep(14 * 60)
 
 
@@ -375,6 +397,7 @@ def handle_message(event):
     text  = event.message.text.strip()
     state = get_state(uid)
 
+    # User is in the middle of entering an amount
     if state.get('step') == 'input_amount':
         try:
             amount = float(text.replace(',', '').replace('$', ''))
@@ -390,17 +413,26 @@ def handle_message(event):
         record_date = state['date']
         field_key   = state['field']
         field_label = FIELD_MAP[field_key]['label']
-        record = update_record_field(record_date, field_key, amount)
-        clear_state(uid)
-        line_bot_api.reply_message(
-            event.reply_token,
-            FlexSendMessage(
-                alt_text="記帳成功",
-                contents=make_confirm_flex(record_date, field_label, amount, record)
+        try:
+            record = update_record_field(record_date, field_key, amount)
+            clear_state(uid)
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(
+                    alt_text="記帳成功",
+                    contents=make_confirm_flex(record_date, field_label, amount, record)
+                )
             )
-        )
+        except Exception as e:
+            print(f"[ERROR] update_record_field: {e}")
+            clear_state(uid)
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="記帳失敗，請重新操作")
+            )
         return
 
+    # Default: show start menu with date picker
     line_bot_api.reply_message(
         event.reply_token,
         FlexSendMessage(alt_text="財務記帳系統", contents=make_start_flex())
@@ -413,38 +445,54 @@ def handle_postback(event):
     data   = dict(p.split('=', 1) for p in event.postback.data.split('&') if '=' in p)
     action = data.get('action')
 
-    if action == 'select_date':
-        record_date = event.postback.params.get('date', str(date.today()))
-        record = get_or_create_record(record_date)
-        line_bot_api.reply_message(
-            event.reply_token,
-            FlexSendMessage(alt_text=f"{record_date} 記帳",
-                            contents=make_field_flex(record_date, record))
-        )
-    elif action == 'input_field':
-        record_date = data.get('date')
-        field_key   = data.get('field')
-        set_state(uid, {'step': 'input_amount', 'date': record_date, 'field': field_key})
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text=f"請輸入【{FIELD_MAP[field_key]['label']}】的金額：")
-        )
-    elif action == 'continue':
-        record_date = data.get('date')
-        record = get_or_create_record(record_date)
-        line_bot_api.reply_message(
-            event.reply_token,
-            FlexSendMessage(alt_text=f"{record_date} 記帳",
-                            contents=make_field_flex(record_date, record))
-        )
-    elif action == 'done':
-        record_date = data.get('date')
-        record = get_or_create_record(record_date)
-        line_bot_api.reply_message(
-            event.reply_token,
-            FlexSendMessage(alt_text=f"{record_date} 記帳完成",
-                            contents=make_summary_flex(record_date, record))
-        )
+    try:
+        if action == 'select_date':
+            record_date = event.postback.params.get('date', str(date.today()))
+            record = get_or_create_record(record_date)
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(alt_text=f"{record_date} 記帳",
+                                contents=make_field_flex(record_date, record))
+            )
+
+        elif action == 'input_field':
+            record_date = data.get('date')
+            field_key   = data.get('field')
+            if not record_date or field_key not in FIELD_MAP:
+                raise ValueError(f"invalid field or date: {data}")
+            set_state(uid, {'step': 'input_amount', 'date': record_date, 'field': field_key})
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=f"請輸入【{FIELD_MAP[field_key]['label']}】的金額：")
+            )
+
+        elif action == 'continue':
+            record_date = data.get('date')
+            record = get_or_create_record(record_date)
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(alt_text=f"{record_date} 記帳",
+                                contents=make_field_flex(record_date, record))
+            )
+
+        elif action == 'done':
+            record_date = data.get('date')
+            record = get_or_create_record(record_date)
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(alt_text=f"{record_date} 記帳完成",
+                                contents=make_summary_flex(record_date, record))
+            )
+
+    except Exception as e:
+        print(f"[ERROR] handle_postback action={action}: {e}")
+        try:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="操作失敗，請重新傳訊息開始")
+            )
+        except Exception:
+            pass
 
 # ─── Admin Auth ───────────────────────────────────────────────────────────────
 
