@@ -452,8 +452,8 @@ def handle_postback(event):
 
     try:
         if action == 'select_date':
-            params = event.postback.params
-            record_date = (params.date if params and params.date else str(date.today()))
+            params = event.postback.params or {}
+            record_date = params.get('date') or str(date.today())
             record = get_or_create_record(record_date)
             line_bot_api.reply_message(
                 event.reply_token,
