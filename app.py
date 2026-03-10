@@ -6,9 +6,8 @@ import urllib.request
 from datetime import datetime, date
 from functools import wraps
 
-import psycopg2
-import psycopg2.extras
-import psycopg2.errorcodes
+import psycopg
+from psycopg.rows import dict_row
 from flask import (
     Flask, request, jsonify, render_template,
     session, redirect, url_for, abort
@@ -27,8 +26,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', '')
 LINE_CHANNEL_SECRET       = os.environ.get('LINE_CHANNEL_SECRET', '')
 ADMIN_PASSWORD            = os.environ.get('ADMIN_PASSWORD', 'admin123')
 DATABASE_URL              = os.environ.get('DATABASE_URL', '')
-# Set this to your Render URL, e.g. https://linebot-finance.onrender.com
-SELF_URL                  = os.environ.get('SELF_URL', '')
+RENDER_EXTERNAL_URL       = os.environ.get('RENDER_EXTERNAL_URL', '')
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler      = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -37,46 +35,61 @@ handler      = WebhookHandler(LINE_CHANNEL_SECRET)
 
 FIELDS = [
     {'key': 'breakfast_total',    'label': '早餐點收',        'subtract': False},
-    {'key': 'breakfast_cash',     'label': '早餐餐-現金',     'subtract': False},
-    {'key': 'breakfast_card',     'label': '早餐餐-刷卡合庫', 'subtract': False},
-    {'key': 'breakfast_linepay',  'label': '早餐餐-LINE Pay', 'subtract': False},
-    {'key': 'breakfast_transfer', 'label': '早餐餐-轉帳',     'subtract': False},
-    {'key': 'counter_expense',    'label': '櫃檯支出',        'subtract': True},
-    {'key': 'panda',              'label': '熊貓',            'subtract': False},
-    {'key': 'ubereats',           'label': 'Uber Eats',       'subtract': False},
-    {'key': 'tips',               'label': '小費',            'subtract': False},
-    {'key': 'surplus',            'label': '溢收',            'subtract': False},
-    {'key': 'pos_total',          'label': 'POS機總額',       'subtract': False},
+    {'key': 'breakfast_cash',     'label': '早餐餐-現金',      'subtract': False},
+    {'key': 'breakfast_card',     'label': '早餐餐-刷卡合庫',  'subtract': False},
+    {'key': 'breakfast_linepay',  'label': '早餐餐-LINE Pay',  'subtract': False},
+    {'key': 'breakfast_transfer', 'label': '早餐餐-轉帳',      'subtract': False},
+    {'key': 'counter_expense',    'label': '櫃檯支出',         'subtract': True},
+    {'key': 'panda',              'label': '熊貓',             'subtract': False},
+    {'key': 'ubereats',           'label': 'Uber Eats',        'subtract': False},
+    {'key': 'tips',               'label': '小費',             'subtract': False},
+    {'key': 'surplus',            'label': '溢收',             'subtract': False},
+    {'key': 'pos_total',          'label': 'POS機總額',        'subtract': False},
 ]
 
 FIELD_KEYS = [f['key'] for f in FIELDS]
 FIELD_MAP  = {f['key']: f for f in FIELDS}
 
-# ─── Database ─────────────────────────────────────────────────────────────────
+# ─── PostgreSQL (psycopg3) ────────────────────────────────────────────────────
 
 def get_db():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
 def init_db():
-    col_defs = '\n'.join(f'    {k} NUMERIC(14,2) DEFAULT 0,' for k in FIELD_KEYS)
-    sql = f"""
-        CREATE TABLE IF NOT EXISTS records (
-            id           SERIAL PRIMARY KEY,
-            record_date  DATE    NOT NULL UNIQUE,
-            {col_defs}
-            total_income NUMERIC(14,2) DEFAULT 0,
-            created_at   TIMESTAMPTZ   DEFAULT NOW(),
-            updated_at   TIMESTAMPTZ   DEFAULT NOW()
-        );
-    """
-    conn = get_db()
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-    conn.close()
-    print('[db] init_db OK')
+    with get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS records (
+                id                  SERIAL PRIMARY KEY,
+                record_date         DATE NOT NULL UNIQUE,
+                breakfast_total     NUMERIC(12,2) DEFAULT 0,
+                breakfast_cash      NUMERIC(12,2) DEFAULT 0,
+                breakfast_card      NUMERIC(12,2) DEFAULT 0,
+                breakfast_linepay   NUMERIC(12,2) DEFAULT 0,
+                breakfast_transfer  NUMERIC(12,2) DEFAULT 0,
+                counter_expense     NUMERIC(12,2) DEFAULT 0,
+                panda               NUMERIC(12,2) DEFAULT 0,
+                ubereats            NUMERIC(12,2) DEFAULT 0,
+                tips                NUMERIC(12,2) DEFAULT 0,
+                surplus             NUMERIC(12,2) DEFAULT 0,
+                pos_total           NUMERIC(12,2) DEFAULT 0,
+                total_income        NUMERIC(12,2) DEFAULT 0,
+                created_at          TIMESTAMPTZ DEFAULT NOW(),
+                updated_at          TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
+
+def row_to_dict(row):
+    if not row:
+        return None
+    d = dict(row)
+    if isinstance(d.get('record_date'), date):
+        d['record_date'] = d['record_date'].isoformat()
+    for k in FIELD_KEYS + ['total_income']:
+        if k in d and d[k] is not None:
+            d[k] = float(d[k])
+    return d
 
 
 def calculate_total(data: dict) -> float:
@@ -87,53 +100,17 @@ def calculate_total(data: dict) -> float:
     return total
 
 
-def row_to_dict(row):
-    if not row:
-        return None
-    d = dict(row)
-    if 'record_date' in d:
-        d['record_date'] = str(d['record_date'])
-    for ts_col in ('created_at', 'updated_at'):
-        if d.get(ts_col):
-            d[ts_col] = str(d[ts_col])
-    return d
+init_db()
 
-
-try:
-    init_db()
-except Exception as e:
-    print(f'[db] Warning during init_db: {e}')
-
-# ─── Keep-Alive Thread ────────────────────────────────────────────────────────
-
-def keep_alive_loop():
-    """Ping /ping every 10 minutes to prevent Render free tier from sleeping."""
-    while True:
-        time.sleep(600)
-        url = SELF_URL.rstrip('/') + '/ping' if SELF_URL else None
-        if url:
-            try:
-                urllib.request.urlopen(url, timeout=15)
-                print(f'[keep-alive] pinged {url}')
-            except Exception as e:
-                print(f'[keep-alive] error: {e}')
-
-
-threading.Thread(target=keep_alive_loop, daemon=True).start()
-
-
-@app.route('/ping')
-def ping():
-    return 'pong', 200
-
-# ─── In-memory LINE user state ────────────────────────────────────────────────
+# ─── User State (LINE Bot) ────────────────────────────────────────────────────
 
 user_states: dict = {}
+
 def get_state(uid):    return user_states.get(uid, {})
 def set_state(uid, d): user_states[uid] = d
 def clear_state(uid):  user_states.pop(uid, None)
 
-# ─── Flex Message Builders ────────────────────────────────────────────────────
+# ─── Flex Builders ────────────────────────────────────────────────────────────
 
 def make_start_flex():
     return {
@@ -142,10 +119,8 @@ def make_start_flex():
             "type": "box", "layout": "vertical",
             "backgroundColor": "#1a2744", "paddingAll": "20px",
             "contents": [
-                {"type": "text", "text": "財務記帳系統",
-                 "color": "#ffffff", "size": "xl", "weight": "bold"},
-                {"type": "text", "text": "請選擇要記帳的日期",
-                 "color": "#9eb3d8", "size": "sm", "margin": "sm"}
+                {"type": "text", "text": "財務記帳系統", "color": "#ffffff", "size": "xl", "weight": "bold"},
+                {"type": "text", "text": "請選擇要記帳的日期", "color": "#9eb3d8", "size": "sm", "margin": "sm"}
             ]
         },
         "body": {
@@ -164,8 +139,8 @@ def make_field_flex(record_date, record=None):
     record = record or {}
 
     def val_text(key):
-        v = record.get(key) or 0
-        return f"${int(float(v)):,}" if float(v) else "未填"
+        v = record.get(key, 0) or 0
+        return f"${int(float(v)):,}" if v else "未填"
 
     rows = []
     for i in range(0, len(FIELDS), 2):
@@ -175,15 +150,13 @@ def make_field_flex(record_date, record=None):
             cols.append({
                 "type": "box", "layout": "vertical", "flex": 1, "spacing": "xs",
                 "contents": [
-                    {"type": "text", "text": f['label'],
-                     "size": "xs", "color": "#666666", "wrap": True},
-                    {"type": "text", "text": val_text(f['key']), "size": "sm",
-                     "weight": "bold",
+                    {"type": "text", "text": f['label'], "size": "xs", "color": "#666666", "wrap": True},
+                    {"type": "text", "text": val_text(f['key']), "size": "sm", "weight": "bold",
                      "color": "#c0392b" if f['subtract'] else "#1a2744"},
-                    {"type": "button",
-                     "action": {"type": "postback", "label": "輸入",
-                                "data": f"action=input_field&date={record_date}&field={f['key']}"},
-                     "style": "secondary", "height": "sm", "color": "#f0f4ff"}
+                    {"type": "button", "action": {
+                        "type": "postback", "label": "輸入",
+                        "data": f"action=input_field&date={record_date}&field={f['key']}"
+                    }, "style": "secondary", "height": "sm", "color": "#f0f4ff"}
                 ]
             })
         if len(pair) == 1:
@@ -195,31 +168,29 @@ def make_field_flex(record_date, record=None):
     rows += [
         {"type": "separator", "margin": "lg"},
         {"type": "box", "layout": "horizontal", "margin": "lg", "contents": [
-            {"type": "text", "text": "當日總收入", "size": "md",
-             "weight": "bold", "color": "#333333", "flex": 1},
-            {"type": "text", "text": f"${int(total):,}", "size": "xl",
-             "weight": "bold", "color": "#1a2744", "align": "end", "flex": 1}
+            {"type": "text", "text": "當日總收入", "size": "md", "weight": "bold",
+             "color": "#333333", "flex": 1},
+            {"type": "text", "text": f"${int(total):,}", "size": "xl", "weight": "bold",
+             "color": "#1a2744", "align": "end", "flex": 1}
         ]},
         {"type": "button", "margin": "lg",
          "action": {"type": "postback", "label": "完成記帳",
                     "data": f"action=done&date={record_date}"},
          "style": "primary", "color": "#1a2744", "height": "sm"}
     ]
-
     return {
         "type": "bubble", "size": "mega",
         "header": {
             "type": "box", "layout": "vertical",
             "backgroundColor": "#1a2744", "paddingAll": "18px",
             "contents": [
-                {"type": "text", "text": record_date,
-                 "color": "#ffffff", "size": "lg", "weight": "bold"},
-                {"type": "text", "text": "點選欄位輸入金額",
-                 "color": "#9eb3d8", "size": "xs", "margin": "xs"}
+                {"type": "text", "text": record_date, "color": "#ffffff",
+                 "size": "lg", "weight": "bold"},
+                {"type": "text", "text": "點選欄位輸入金額", "color": "#9eb3d8",
+                 "size": "xs", "margin": "xs"}
             ]
         },
-        "body": {"type": "box", "layout": "vertical",
-                 "paddingAll": "16px", "contents": rows}
+        "body": {"type": "box", "layout": "vertical", "paddingAll": "16px", "contents": rows}
     }
 
 
@@ -230,22 +201,17 @@ def make_confirm_flex(record_date, field_label, amount, record=None):
         "body": {
             "type": "box", "layout": "vertical", "paddingAll": "20px",
             "contents": [
-                {"type": "text", "text": "記帳成功",
-                 "weight": "bold", "size": "lg", "color": "#1a2744"},
+                {"type": "text", "text": "記帳成功", "weight": "bold", "size": "lg", "color": "#1a2744"},
                 {"type": "separator", "margin": "md"},
                 {"type": "box", "layout": "horizontal", "margin": "md", "contents": [
-                    {"type": "text", "text": field_label,
-                     "size": "sm", "color": "#666666", "flex": 1},
-                    {"type": "text", "text": f"${int(amount):,}",
-                     "size": "sm", "weight": "bold", "color": "#1a2744",
-                     "align": "end", "flex": 1}
+                    {"type": "text", "text": field_label, "size": "sm", "color": "#666666", "flex": 1},
+                    {"type": "text", "text": f"${int(amount):,}", "size": "sm", "weight": "bold",
+                     "color": "#1a2744", "align": "end", "flex": 1}
                 ]},
                 {"type": "box", "layout": "horizontal", "margin": "sm", "contents": [
-                    {"type": "text", "text": "當日總收入",
-                     "size": "sm", "color": "#666666", "flex": 1},
-                    {"type": "text", "text": f"${int(total):,}",
-                     "size": "sm", "weight": "bold", "color": "#1a2744",
-                     "align": "end", "flex": 1}
+                    {"type": "text", "text": "當日總收入", "size": "sm", "color": "#666666", "flex": 1},
+                    {"type": "text", "text": f"${int(total):,}", "size": "sm", "weight": "bold",
+                     "color": "#1a2744", "align": "end", "flex": 1}
                 ]},
                 {"type": "separator", "margin": "md"},
                 {"type": "button", "margin": "md",
@@ -263,7 +229,7 @@ def make_confirm_flex(record_date, field_label, amount, record=None):
 
 def make_summary_flex(record_date, record):
     total = calculate_total(record)
-    rows  = []
+    rows = []
     for f in FIELDS:
         val = float(record.get(f['key']) or 0)
         if val == 0:
@@ -271,10 +237,9 @@ def make_summary_flex(record_date, record):
         rows.append({
             "type": "box", "layout": "horizontal", "margin": "sm",
             "contents": [
-                {"type": "text", "text": f['label'],
-                 "size": "sm", "color": "#666666", "flex": 2},
+                {"type": "text", "text": f['label'], "size": "sm", "color": "#666666", "flex": 2},
                 {"type": "text",
-                 "text": f"{'-' if f['subtract'] else ''}${int(val):,}",
+                 "text": f"-${int(val):,}" if f['subtract'] else f"${int(val):,}",
                  "size": "sm", "weight": "bold",
                  "color": "#c0392b" if f['subtract'] else "#2c3e50",
                  "align": "end", "flex": 1}
@@ -286,11 +251,9 @@ def make_summary_flex(record_date, record):
     rows += [
         {"type": "separator", "margin": "lg"},
         {"type": "box", "layout": "horizontal", "margin": "lg", "contents": [
-            {"type": "text", "text": "總收入",
-             "size": "lg", "weight": "bold", "flex": 1},
-            {"type": "text", "text": f"${int(total):,}",
-             "size": "lg", "weight": "bold", "color": "#1a2744",
-             "align": "end", "flex": 1}
+            {"type": "text", "text": "總收入", "size": "lg", "weight": "bold", "flex": 1},
+            {"type": "text", "text": f"${int(total):,}", "size": "lg", "weight": "bold",
+             "color": "#1a2744", "align": "end", "flex": 1}
         ]}
     ]
     return {
@@ -298,61 +261,85 @@ def make_summary_flex(record_date, record):
         "header": {
             "type": "box", "layout": "vertical",
             "backgroundColor": "#1a2744", "paddingAll": "18px",
-            "contents": [
-                {"type": "text", "text": f"{record_date} 總覽",
-                 "color": "#ffffff", "size": "lg", "weight": "bold"}
-            ]
+            "contents": [{"type": "text", "text": f"{record_date} 總覽",
+                          "color": "#ffffff", "size": "lg", "weight": "bold"}]
         },
-        "body": {"type": "box", "layout": "vertical",
-                 "paddingAll": "16px", "contents": rows}
+        "body": {"type": "box", "layout": "vertical", "paddingAll": "16px", "contents": rows}
     }
 
 # ─── DB Helpers ───────────────────────────────────────────────────────────────
 
 def get_or_create_record(record_date):
-    conn = get_db()
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute('SELECT * FROM records WHERE record_date=%s', (record_date,))
-            row = cur.fetchone()
-            if not row:
-                cur.execute(
-                    'INSERT INTO records (record_date) VALUES (%s) '
-                    'ON CONFLICT (record_date) DO NOTHING RETURNING *',
-                    (record_date,)
-                )
-                row = cur.fetchone()
-                if not row:
-                    cur.execute('SELECT * FROM records WHERE record_date=%s', (record_date,))
-                    row = cur.fetchone()
-    conn.close()
+    with get_db() as conn:
+        row = conn.execute(
+            'SELECT * FROM records WHERE record_date=%s', (record_date,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                'INSERT INTO records (record_date) VALUES (%s) RETURNING *',
+                (record_date,)
+            ).fetchone()
     return row_to_dict(row)
 
 
 def update_record_field(record_date, field_key, amount):
-    record = get_or_create_record(record_date)
-    record[field_key] = amount
-    total = calculate_total(record)
-    conn = get_db()
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f'UPDATE records SET {field_key}=%s, total_income=%s, '
-                f'updated_at=NOW() WHERE record_date=%s RETURNING *',
-                (amount, total, record_date)
-            )
-            row = cur.fetchone()
-    conn.close()
+    with get_db() as conn:
+        row = conn.execute(
+            'SELECT * FROM records WHERE record_date=%s', (record_date,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                'INSERT INTO records (record_date) VALUES (%s) RETURNING *',
+                (record_date,)
+            ).fetchone()
+        record = row_to_dict(row)
+        record[field_key] = float(amount)
+        total = calculate_total(record)
+        row = conn.execute(
+            f'UPDATE records SET {field_key}=%s, total_income=%s, updated_at=NOW() '
+            f'WHERE record_date=%s RETURNING *',
+            (amount, total, record_date)
+        ).fetchone()
     return row_to_dict(row)
 
-# ─── LINE Bot Webhook ─────────────────────────────────────────────────────────
+# ─── Keep-Alive ───────────────────────────────────────────────────────────────
+
+def keep_alive():
+    time.sleep(60)
+    while True:
+        try:
+            base = (RENDER_EXTERNAL_URL or 'http://localhost:5000').rstrip('/')
+            req  = urllib.request.Request(
+                f'{base}/health',
+                headers={'User-Agent': 'KeepAlive/1.0'}
+            )
+            urllib.request.urlopen(req, timeout=10)
+        except Exception:
+            pass
+        time.sleep(14 * 60)
+
+
+threading.Thread(target=keep_alive, daemon=True).start()
+
+# ─── Health ───────────────────────────────────────────────────────────────────
+
+@app.route('/health')
+def health():
+    try:
+        with get_db() as conn:
+            conn.execute('SELECT 1')
+        return jsonify({'status': 'ok', 'db': 'connected'}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'detail': str(e)}), 500
+
+# ─── LINE Bot ─────────────────────────────────────────────────────────────────
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    sig  = request.headers.get('X-Line-Signature', '')
+    signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
     try:
-        handler.handle(body, sig)
+        handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
     return 'OK'
@@ -372,25 +359,26 @@ def handle_message(event):
         except ValueError:
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text='請輸入有效的數字金額，例如：1500')
+                TextSendMessage(text="請輸入有效的數字金額，例如：1500")
             )
             return
-
         record_date = state['date']
         field_key   = state['field']
         field_label = FIELD_MAP[field_key]['label']
         record = update_record_field(record_date, field_key, amount)
         clear_state(uid)
-        flex = make_confirm_flex(record_date, field_label, amount, record)
         line_bot_api.reply_message(
             event.reply_token,
-            FlexSendMessage(alt_text='記帳成功', contents=flex)
+            FlexSendMessage(
+                alt_text="記帳成功",
+                contents=make_confirm_flex(record_date, field_label, amount, record)
+            )
         )
         return
 
     line_bot_api.reply_message(
         event.reply_token,
-        FlexSendMessage(alt_text='財務記帳系統', contents=make_start_flex())
+        FlexSendMessage(alt_text="財務記帳系統", contents=make_start_flex())
     )
 
 
@@ -405,39 +393,35 @@ def handle_postback(event):
         record = get_or_create_record(record_date)
         line_bot_api.reply_message(
             event.reply_token,
-            FlexSendMessage(alt_text=f'{record_date} 記帳',
+            FlexSendMessage(alt_text=f"{record_date} 記帳",
                             contents=make_field_flex(record_date, record))
         )
-
     elif action == 'input_field':
+        record_date = data.get('date')
         field_key   = data.get('field')
-        field_label = FIELD_MAP.get(field_key, {}).get('label', field_key)
-        set_state(uid, {'step': 'input_amount',
-                        'date': data.get('date'), 'field': field_key})
+        set_state(uid, {'step': 'input_amount', 'date': record_date, 'field': field_key})
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text=f'請輸入【{field_label}】的金額：')
+            TextSendMessage(text=f"請輸入【{FIELD_MAP[field_key]['label']}】的金額：")
         )
-
     elif action == 'continue':
         record_date = data.get('date')
         record = get_or_create_record(record_date)
         line_bot_api.reply_message(
             event.reply_token,
-            FlexSendMessage(alt_text=f'{record_date} 記帳',
+            FlexSendMessage(alt_text=f"{record_date} 記帳",
                             contents=make_field_flex(record_date, record))
         )
-
     elif action == 'done':
         record_date = data.get('date')
         record = get_or_create_record(record_date)
         line_bot_api.reply_message(
             event.reply_token,
-            FlexSendMessage(alt_text=f'{record_date} 記帳完成',
+            FlexSendMessage(alt_text=f"{record_date} 記帳完成",
                             contents=make_summary_flex(record_date, record))
         )
 
-# ─── Admin ────────────────────────────────────────────────────────────────────
+# ─── Admin Auth ───────────────────────────────────────────────────────────────
 
 def login_required(f):
     @wraps(f)
@@ -471,28 +455,25 @@ def admin_logout():
 def admin_dashboard():
     return render_template('admin.html', fields=FIELDS)
 
-
-# ── Admin API ──────────────────────────────────────────────────
+# ─── Admin API ────────────────────────────────────────────────────────────────
 
 @app.route('/api/records', methods=['GET'])
 @login_required
 def api_list_records():
-    conn = get_db()
-    with conn.cursor() as cur:
-        cur.execute('SELECT * FROM records ORDER BY record_date DESC')
-        rows = cur.fetchall()
-    conn.close()
+    with get_db() as conn:
+        rows = conn.execute(
+            'SELECT * FROM records ORDER BY record_date DESC'
+        ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
 
 @app.route('/api/records/<record_date>', methods=['GET'])
 @login_required
 def api_get_record(record_date):
-    conn = get_db()
-    with conn.cursor() as cur:
-        cur.execute('SELECT * FROM records WHERE record_date=%s', (record_date,))
-        row = cur.fetchone()
-    conn.close()
+    with get_db() as conn:
+        row = conn.execute(
+            'SELECT * FROM records WHERE record_date=%s', (record_date,)
+        ).fetchone()
     if not row:
         return jsonify({'error': 'not found'}), 404
     return jsonify(row_to_dict(row))
@@ -511,83 +492,56 @@ def api_create_record():
     cols  = ', '.join(FIELD_KEYS)
     phs   = ', '.join(['%s'] * len(FIELD_KEYS))
 
-    conn = get_db()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f'INSERT INTO records (record_date, {cols}, total_income) '
-                    f'VALUES (%s, {phs}, %s) RETURNING *',
-                    [record_date] + [vals[k] for k in FIELD_KEYS] + [total]
-                )
-                row = cur.fetchone()
-        conn.close()
+        with get_db() as conn:
+            row = conn.execute(
+                f'INSERT INTO records (record_date, {cols}, total_income) '
+                f'VALUES (%s, {phs}, %s) RETURNING *',
+                [record_date] + [vals[k] for k in FIELD_KEYS] + [total]
+            ).fetchone()
         return jsonify(row_to_dict(row)), 201
-    except psycopg2.errors.UniqueViolation:
-        conn.close()
+    except psycopg.errors.UniqueViolation:
         return jsonify({'error': '該日期已存在'}), 409
-    except Exception as e:
-        conn.close()
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/records/<record_date>', methods=['PUT'])
 @login_required
 def api_update_record(record_date):
-    body = request.get_json(force=True)
-    conn = get_db()
-    with conn.cursor() as cur:
-        cur.execute('SELECT * FROM records WHERE record_date=%s', (record_date,))
-        row = cur.fetchone()
-    if not row:
-        conn.close()
-        return jsonify({'error': 'not found'}), 404
-
-    current    = dict(row)
-    vals       = {k: float(body.get(k, current.get(k)) or 0) for k in FIELD_KEYS}
-    total      = calculate_total(vals)
+    body  = request.get_json(force=True)
+    vals  = {k: float(body.get(k) or 0) for k in FIELD_KEYS}
+    total = calculate_total(vals)
     set_clause = ', '.join([f'{k}=%s' for k in FIELD_KEYS])
 
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f'UPDATE records SET {set_clause}, total_income=%s, '
-                f'updated_at=NOW() WHERE record_date=%s RETURNING *',
-                [vals[k] for k in FIELD_KEYS] + [total, record_date]
-            )
-            row = cur.fetchone()
-    conn.close()
+    with get_db() as conn:
+        row = conn.execute(
+            f'UPDATE records SET {set_clause}, total_income=%s, updated_at=NOW() '
+            f'WHERE record_date=%s RETURNING *',
+            [vals[k] for k in FIELD_KEYS] + [total, record_date]
+        ).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
     return jsonify(row_to_dict(row))
 
 
 @app.route('/api/records/<record_date>', methods=['DELETE'])
 @login_required
 def api_delete_record(record_date):
-    conn = get_db()
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute('DELETE FROM records WHERE record_date=%s', (record_date,))
-    conn.close()
+    with get_db() as conn:
+        conn.execute('DELETE FROM records WHERE record_date=%s', (record_date,))
     return jsonify({'deleted': record_date})
 
 
 @app.route('/api/summary', methods=['GET'])
 @login_required
 def api_summary():
-    conn = get_db()
-    with conn.cursor() as cur:
-        cur.execute('''
-            SELECT COUNT(*)                         AS days,
-                   COALESCE(SUM(total_income), 0)   AS total,
-                   COALESCE(AVG(total_income), 0)   AS avg_daily
+    with get_db() as conn:
+        row = conn.execute('''
+            SELECT COUNT(*)                        AS days,
+                   COALESCE(SUM(total_income), 0)  AS total,
+                   COALESCE(AVG(total_income), 0)  AS avg_daily
             FROM records
-        ''')
-        row = cur.fetchone()
-    conn.close()
-    d = dict(row)
-    d['total']     = float(d['total'])
-    d['avg_daily'] = float(d['avg_daily'])
-    return jsonify(d)
+        ''').fetchone()
+    return jsonify({k: float(v) if v is not None else 0 for k, v in dict(row).items()})
 
 
 @app.route('/')
