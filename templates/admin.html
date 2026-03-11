@@ -174,6 +174,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <a href="#" class="nav-item active" id="nav-records" onclick="showPage('records',event)">每日記帳</a>
     <a href="#" class="nav-item"        id="nav-charts"  onclick="showPage('charts',event)">圖表分析</a>
     <a href="#" class="nav-item"        id="nav-summary" onclick="showPage('summary',event)">欄位統計</a>
+    <a href="#" class="nav-item"        id="nav-ocr"     onclick="showPage('ocr',event)">AI 報帳辨識</a>
   </nav>
   <div class="sidebar-bottom">
     <a href="/admin/logout" class="logout-btn">登出系統</a>
@@ -326,7 +327,66 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
         </table>
       </div>
     </div>
-  </div>
+  </div><!-- end page-summary -->
+
+  <!-- ── AI 報帳辨識 ──────────────────────────── -->
+  <div class="page" id="page-ocr" style="display:none">
+
+    <!-- API Key bar -->
+    <div class="filter-bar" style="margin-bottom:20px;gap:14px;flex-wrap:wrap">
+      <span class="filter-label">OpenAI API Key</span>
+      <div style="position:relative;flex:1;min-width:260px">
+        <input class="filter-input" type="password" id="ocr-key"
+          placeholder="sk-..." style="width:100%;padding-right:80px"
+          oninput="saveOcrKey()">
+        <button class="btn btn-sm btn-ghost" onclick="toggleKeyVis()"
+          style="position:absolute;right:6px;top:50%;transform:translateY(-50%);font-size:11px"
+          id="key-vis-btn">顯示</button>
+      </div>
+      <span style="font-size:11px;color:var(--muted)">Key 僅在本機使用，不會儲存至伺服器</span>
+    </div>
+
+    <!-- Upload zone -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <span class="card-title">上傳收據 / 點單</span>
+        <span style="font-size:12px;color:var(--muted)">支援 JPG、PNG、WEBP，可批次選擇多張</span>
+      </div>
+      <div style="padding:20px">
+        <div id="drop-zone" onclick="document.getElementById('ocr-file-input').click()"
+          style="border:2px dashed var(--border);border-radius:10px;padding:40px 20px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--bg)"
+          ondragover="dzOver(event)" ondragleave="dzLeave(event)" ondrop="dzDrop(event)">
+          <div style="font-size:32px;margin-bottom:10px;opacity:.4">📄</div>
+          <div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:4px">點擊或拖曳圖片至此</div>
+          <div style="font-size:12px;color:var(--muted)">可同時上傳多張，逐張辨識</div>
+        </div>
+        <input type="file" id="ocr-file-input" accept="image/*" multiple
+          style="display:none" onchange="ocrFilesSelected(this.files)">
+      </div>
+    </div>
+
+    <!-- Preview + process -->
+    <div id="ocr-preview-section" style="display:none;margin-bottom:20px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="font-size:14px;font-weight:700;color:var(--navy)">待辨識圖片 (<span id="ocr-count">0</span> 張)</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-outline btn-sm" onclick="clearOcrFiles()">清除全部</button>
+          <button class="btn btn-primary" id="ocr-run-btn" onclick="runOcr()">開始 AI 辨識</button>
+        </div>
+      </div>
+      <div id="ocr-thumbs" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:0"></div>
+    </div>
+
+    <!-- Results -->
+    <div id="ocr-results-section" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <span style="font-size:14px;font-weight:700;color:var(--navy)">辨識結果</span>
+        <button class="btn btn-outline btn-sm" onclick="exportOcrCsv()">匯出 CSV</button>
+      </div>
+      <div id="ocr-results-list"></div>
+    </div>
+
+  </div><!-- end page-ocr -->
 </main>
 
 <!-- Modal -->
@@ -421,15 +481,16 @@ function showPage(page, e) {
   if (e) e.preventDefault();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
-  ['records','charts','summary'].forEach(p =>
+  ['records','charts','summary','ocr'].forEach(p =>
     document.getElementById('page-' + p).style.display = p === page ? '' : 'none'
   );
   document.getElementById('page-title').textContent =
-    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計' }[page];
+    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識' }[page];
   document.getElementById('new-btn').style.display = page === 'records' ? '' : 'none';
   if (page === 'records') loadRecords();
   if (page === 'charts')  { initChartDefaults(); renderCharts(); }
   if (page === 'summary') loadSummary();
+  if (page === 'ocr')     initOcr();
 }
 
 // ── Data ──────────────────────────────────────────────────────
@@ -792,6 +853,181 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal
 
 // ── Init ──────────────────────────────────────────────────────
 loadRecords();
+
+// ═══════════════════════════════════════════════════════════════
+// AI 報帳辨識
+// ═══════════════════════════════════════════════════════════════
+let ocrFiles  = [];
+let ocrResults = [];
+
+function initOcr() {
+  const saved = sessionStorage.getItem('ocr_key');
+  if (saved) document.getElementById('ocr-key').value = saved;
+}
+
+function saveOcrKey() {
+  sessionStorage.setItem('ocr_key', document.getElementById('ocr-key').value);
+}
+
+function toggleKeyVis() {
+  const inp = document.getElementById('ocr-key');
+  const btn = document.getElementById('key-vis-btn');
+  if (inp.type === 'password') { inp.type = 'text';     btn.textContent = '隱藏'; }
+  else                          { inp.type = 'password'; btn.textContent = '顯示'; }
+}
+
+// ── Drop zone ─────────────────────────────────────────────────
+function dzOver(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').style.borderColor = 'var(--accent)';
+  document.getElementById('drop-zone').style.background  = 'var(--accent-light)';
+}
+function dzLeave(e) {
+  document.getElementById('drop-zone').style.borderColor = 'var(--border)';
+  document.getElementById('drop-zone').style.background  = 'var(--bg)';
+}
+function dzDrop(e) {
+  e.preventDefault();
+  dzLeave(e);
+  ocrFilesSelected(e.dataTransfer.files);
+}
+function ocrFilesSelected(fileList) {
+  const imgs = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+  ocrFiles = [...ocrFiles, ...imgs];
+  renderOcrThumbs();
+}
+
+function renderOcrThumbs() {
+  const wrap = document.getElementById('ocr-thumbs');
+  wrap.innerHTML = '';
+  ocrFiles.forEach((f, i) => {
+    const url = URL.createObjectURL(f);
+    const div = document.createElement('div');
+    div.style.cssText = 'position:relative;width:100px;height:100px;border-radius:8px;overflow:hidden;border:1.5px solid var(--border);background:#000;flex-shrink:0';
+    div.innerHTML = `
+      <img src="${url}" style="width:100%;height:100%;object-fit:cover;opacity:.9">
+      <button onclick="removeOcrFile(${i})" style="position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;border:none;cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center">&times;</button>
+      <div style="position:absolute;bottom:0;left:0;right:0;padding:3px 5px;background:rgba(0,0,0,.55);font-size:9px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${f.name}</div>`;
+    wrap.appendChild(div);
+  });
+  document.getElementById('ocr-count').textContent = ocrFiles.length;
+  document.getElementById('ocr-preview-section').style.display = ocrFiles.length ? '' : 'none';
+}
+
+function removeOcrFile(i) {
+  ocrFiles.splice(i, 1);
+  renderOcrThumbs();
+}
+function clearOcrFiles() {
+  ocrFiles = [];
+  renderOcrThumbs();
+  document.getElementById('ocr-results-section').style.display = 'none';
+}
+
+// ── Run OCR ────────────────────────────────────────────────────
+async function runOcr() {
+  const key = document.getElementById('ocr-key').value.trim();
+  if (!key) { showToast('請先填入 OpenAI API Key', 'error'); return; }
+  if (!ocrFiles.length) { showToast('請先上傳圖片', 'error'); return; }
+
+  const btn = document.getElementById('ocr-run-btn');
+  btn.disabled = true;
+  btn.textContent = '辨識中...';
+
+  const fd = new FormData();
+  fd.append('openai_key', key);
+  ocrFiles.forEach(f => fd.append('files[]', f));
+
+  try {
+    const res = await fetch('/api/ocr', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.error) { showToast(data.error, 'error'); return; }
+    ocrResults = data.results;
+    renderOcrResults();
+    showToast(`辨識完成，共 ${ocrResults.length} 張`, 'success');
+  } catch(err) {
+    showToast('辨識失敗：' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '開始 AI 辨識';
+  }
+}
+
+// ── Render Results ─────────────────────────────────────────────
+function renderOcrResults() {
+  const wrap = document.getElementById('ocr-results-list');
+  wrap.innerHTML = '';
+  ocrResults.forEach((r, ri) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.marginBottom = '16px';
+
+    if (r.error) {
+      card.innerHTML = `
+        <div class="card-header" style="background:var(--red-light)">
+          <span class="card-title" style="color:var(--red)">${escHtml(r.filename)}</span>
+          <span style="font-size:12px;color:var(--red)">辨識失敗</span>
+        </div>
+        <div style="padding:16px 24px;font-size:13px;color:var(--red)">${escHtml(r.error)}</div>`;
+    } else {
+      const rows = (r.items || []).map(it => `
+        <tr>
+          <td>${escHtml(it.name || '')}</td>
+          <td style="text-align:center">${escHtml(String(it.qty ?? '—'))}</td>
+          <td style="text-align:right;font-family:'DM Mono',monospace">${fmtAmt(it.amount)}</td>
+        </tr>`).join('');
+
+      card.innerHTML = `
+        <div class="card-header">
+          <span class="card-title">${escHtml(r.filename)}</span>
+          <span style="font-size:13px;font-family:'DM Mono',monospace;font-weight:600;color:var(--green)">
+            總計 $${Number(r.total || 0).toLocaleString()}
+          </span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>品名</th><th style="text-align:center;width:80px">數量</th><th style="text-align:right;width:120px">金額</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="3" class="empty-state"><div class="empty-state-text">無辨識結果</div></td></tr>'}</tbody>
+            <tfoot>
+              <tr style="font-weight:600;background:var(--bg)">
+                <td colspan="2" style="padding:10px 16px;color:var(--navy)">合計</td>
+                <td style="text-align:right;padding:10px 16px;font-family:\'DM Mono\',monospace;color:var(--green)">$${Number(r.total || 0).toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>`;
+    }
+    wrap.appendChild(card);
+  });
+  document.getElementById('ocr-results-section').style.display = '';
+}
+
+function fmtAmt(v) {
+  if (v === null || v === undefined) return '—';
+  const n = Number(v);
+  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString();
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── CSV Export ─────────────────────────────────────────────────
+function exportOcrCsv() {
+  if (!ocrResults.length) return;
+  let csv = '\uFEFF檔案名稱,品名,數量,金額\n';
+  ocrResults.forEach(r => {
+    if (r.error) { csv += `${r.filename},辨識失敗,,\n`; return; }
+    (r.items || []).forEach(it => {
+      csv += [r.filename, it.name, it.qty ?? '', it.amount ?? ''].map(v =>
+        `"${String(v).replace(/"/g,'""')}"`).join(',') + '\n';
+    });
+    csv += `${r.filename},【合計】,,${r.total}\n`;
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
+  a.download = `ocr_results_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+}
 </script>
 </body>
 </html>

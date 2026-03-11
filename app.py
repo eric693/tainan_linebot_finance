@@ -712,6 +712,88 @@ def api_summary():
     return jsonify({k: float(v) if v is not None else 0 for k, v in dict(row).items()})
 
 
+@app.route('/api/ocr', methods=['POST'])
+@login_required
+def api_ocr():
+    """
+    Accept one or more images + an OpenAI API key.
+    Returns: { results: [{ filename, items:[{name,qty,amount}], total, error }] }
+    """
+    import base64, json as _json, urllib.error
+
+    openai_key = request.form.get('openai_key', '').strip()
+    if not openai_key:
+        return jsonify({'error': 'OpenAI API key is required'}), 400
+
+    files = request.files.getlist('files[]')
+    if not files:
+        return jsonify({'error': 'No files uploaded'}), 400
+
+    SYSTEM_PROMPT = (
+        "你是一個收據/點單辨識助手。"
+        "請從圖片中擷取所有品項，回傳純 JSON（不要加 markdown 代碼區塊），格式如下：\n"
+        '{"items":[{"name":"品名","qty":"數量","amount":金額數字}],"total":總金額數字}\n'
+        "若某欄位無法辨識，qty 填 null，amount 填 0。"
+        "total 為所有 amount 加總（負數折扣請保留負號）。"
+        "只回傳 JSON，不要有任何其他文字。"
+    )
+
+    results = []
+    for f in files:
+        filename = f.filename or 'unknown'
+        raw = f.read()
+        b64 = base64.b64encode(raw).decode()
+        mime = f.content_type or 'image/jpeg'
+
+        payload = _json.dumps({
+            "model": "gpt-4o",
+            "max_tokens": 2000,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": SYSTEM_PROMPT},
+                    {"type": "image_url", "image_url": {
+                        "url": f"data:{mime};base64,{b64}",
+                        "detail": "high"
+                    }}
+                ]
+            }]
+        }).encode('utf-8')
+
+        req = urllib.request.Request(
+            'https://api.openai.com/v1/chat/completions',
+            data=payload,
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {openai_key}'
+            }
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp_data = _json.loads(resp.read())
+            content = resp_data['choices'][0]['message']['content'].strip()
+            # Strip possible markdown fences
+            if content.startswith('```'):
+                content = content.split('\n', 1)[-1]
+                content = content.rsplit('```', 1)[0].strip()
+            parsed = _json.loads(content)
+            results.append({
+                'filename': filename,
+                'items': parsed.get('items', []),
+                'total': parsed.get('total', 0),
+                'error': None
+            })
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode('utf-8', errors='replace')
+            results.append({'filename': filename, 'items': [], 'total': 0,
+                            'error': f'OpenAI HTTP {e.code}: {err_body[:200]}'})
+        except Exception as e:
+            results.append({'filename': filename, 'items': [], 'total': 0,
+                            'error': str(e)})
+
+    return jsonify({'results': results})
+
+
 @app.route('/')
 def index():
     return redirect(url_for('admin_login'))
