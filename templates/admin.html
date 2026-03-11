@@ -51,6 +51,18 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 .btn-ghost:hover { color: var(--text); border-color: #aaa; }
 .btn-sm { padding: 5px 12px; font-size: 12px; }
 
+/* OCR sub-tabs */
+.ocr-tab { padding: 9px 20px; font-size: 13px; font-weight: 500; font-family: 'Noto Sans TC', sans-serif; background: transparent; border: none; border-bottom: 3px solid transparent; color: var(--muted); cursor: pointer; transition: all 0.15s; margin-bottom: -2px; }
+.ocr-tab:hover { color: var(--text); }
+.ocr-tab.active { color: var(--navy); border-bottom-color: var(--accent); font-weight: 700; }
+
+/* OCR inline edit table */
+.ocr-edit-input { border: 1px solid transparent; border-radius: 4px; padding: 3px 6px; font-family: 'DM Mono', monospace; font-size: 13px; width: 100%; background: transparent; transition: border-color 0.15s; }
+.ocr-edit-input:focus { outline: none; border-color: var(--accent); background: #fff; }
+.ocr-edit-input.num { text-align: right; }
+.ocr-row-del { background: transparent; border: none; cursor: pointer; color: var(--muted); font-size: 16px; padding: 0 4px; line-height: 1; transition: color 0.15s; }
+.ocr-row-del:hover { color: var(--red); }
+
 /* Page */
 .page { padding: 28px 32px; flex: 1; }
 
@@ -153,17 +165,45 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #c8d0e0; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #a0abbe; }
+/* ── Mobile overlay sidebar ── */
+.sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 99; }
+.hamburger { display: none; flex-direction: column; gap: 5px; cursor: pointer; padding: 8px; border: none; background: transparent; }
+.hamburger span { display: block; width: 22px; height: 2px; background: var(--navy); border-radius: 2px; transition: all 0.2s; }
+
 @media (max-width: 768px) {
-  .sidebar { display: none; } .main { margin-left: 0; }
-  .stats-row { grid-template-columns: repeat(2,1fr); }
+  /* layout */
+  body { overflow: hidden; }
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 200;
+    box-shadow: 4px 0 24px rgba(0,0,0,.25);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-overlay.open { display: block; }
+  .main { margin-left: 0; }
+  .hamburger { display: flex; }
+  .topbar { padding: 0 16px; }
+
+  /* content */
+  .stats-row { grid-template-columns: repeat(2,1fr); gap: 10px; }
   .form-grid, .charts-grid { grid-template-columns: 1fr; }
-  .page { padding: 16px; }
+  .page { padding: 14px 16px; }
+  .filter-bar { gap: 8px; padding: 10px 14px; }
+  .card-header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .topbar-title { font-size: 15px; }
+  .btn { font-size: 12px; padding: 7px 13px; }
+  .ocr-tab { padding: 8px 14px; font-size: 12px; }
 }
 </style>
 </head>
 <body>
 
-<aside class="sidebar">
+<!-- Mobile sidebar overlay -->
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+<aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
     <div class="sidebar-brand-title">財務管理後台</div>
     <div class="sidebar-brand-sub">Finance System</div>
@@ -183,7 +223,12 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
 <main class="main">
   <header class="topbar">
-    <span class="topbar-title" id="page-title">每日記帳</span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="hamburger" id="hamburger-btn" onclick="openSidebar()" aria-label="選單">
+        <span></span><span></span><span></span>
+      </button>
+      <span class="topbar-title" id="page-title">每日記帳</span>
+    </div>
     <div class="topbar-actions">
       <button class="btn btn-primary" id="new-btn" onclick="openNewModal()">新增記錄</button>
     </div>
@@ -332,51 +377,65 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
   <!-- ── AI 報帳辨識 ──────────────────────────── -->
   <div class="page" id="page-ocr" style="display:none">
 
-    <!-- Status bar -->
-    <div class="filter-bar" style="margin-bottom:20px;gap:14px">
-      <div style="width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0"></div>
-      <span style="font-size:13px;color:var(--text);font-weight:500">OpenAI API Key 已由伺服器環境變數提供</span>
-      <span style="font-size:12px;color:var(--muted)">如需更換，請至 Render Dashboard → Environment → <code style="background:var(--bg);padding:1px 5px;border-radius:4px;font-size:11px">OPENAI_API_KEY</code></span>
+    <!-- Sub-tabs -->
+    <div style="display:flex;gap:0;margin-bottom:20px;border-bottom:2px solid var(--border)">
+      <button class="ocr-tab active" id="ocrtab-upload" onclick="switchOcrTab('upload')">上傳辨識</button>
+      <button class="ocr-tab" id="ocrtab-history" onclick="switchOcrTab('history')">辨識記錄</button>
     </div>
 
-    <!-- Upload zone -->
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-header">
-        <span class="card-title">上傳收據 / 點單</span>
-        <span style="font-size:12px;color:var(--muted)">支援 JPG、PNG、WEBP，可批次選擇多張</span>
+    <!-- Upload panel -->
+    <div id="ocr-panel-upload">
+      <div class="filter-bar" style="margin-bottom:20px;gap:14px">
+        <div style="width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0"></div>
+        <span style="font-size:13px;color:var(--text);font-weight:500">OpenAI API Key 已由伺服器環境變數提供</span>
+        <span style="font-size:12px;color:var(--muted)">如需更換，請至 Render Dashboard → Environment → <code style="background:var(--bg);padding:1px 5px;border-radius:4px;font-size:11px">OPENAI_API_KEY</code></span>
       </div>
-      <div style="padding:20px">
-        <div id="drop-zone" onclick="document.getElementById('ocr-file-input').click()"
-          style="border:2px dashed var(--border);border-radius:10px;padding:40px 20px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--bg)"
-          ondragover="dzOver(event)" ondragleave="dzLeave(event)" ondrop="dzDrop(event)">
-          <div style="font-size:32px;margin-bottom:10px;opacity:.4">📄</div>
-          <div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:4px">點擊或拖曳圖片至此</div>
-          <div style="font-size:12px;color:var(--muted)">可同時上傳多張，逐張辨識</div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header">
+          <span class="card-title">上傳收據 / 點單</span>
+          <span style="font-size:12px;color:var(--muted)">支援 JPG、PNG、WEBP，可拖曳批次上傳</span>
         </div>
-        <input type="file" id="ocr-file-input" accept="image/*" multiple
-          style="display:none" onchange="ocrFilesSelected(this.files)">
-      </div>
-    </div>
-
-    <!-- Preview + process -->
-    <div id="ocr-preview-section" style="display:none;margin-bottom:20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <span style="font-size:14px;font-weight:700;color:var(--navy)">待辨識圖片 (<span id="ocr-count">0</span> 張)</span>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-outline btn-sm" onclick="clearOcrFiles()">清除全部</button>
-          <button class="btn btn-primary" id="ocr-run-btn" onclick="runOcr()">開始 AI 辨識</button>
+        <div style="padding:20px">
+          <div id="drop-zone" onclick="document.getElementById('ocr-file-input').click()"
+            style="border:2px dashed var(--border);border-radius:10px;padding:40px 20px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--bg)"
+            ondragover="dzOver(event)" ondragleave="dzLeave(event)" ondrop="dzDrop(event)">
+            <div style="font-size:32px;margin-bottom:10px;opacity:.4">📄</div>
+            <div style="font-size:14px;color:var(--text);font-weight:600;margin-bottom:4px">點擊或拖曳圖片至此</div>
+            <div style="font-size:12px;color:var(--muted)">可同時上傳多張，每張個別辨識</div>
+          </div>
+          <input type="file" id="ocr-file-input" accept="image/*" multiple
+            style="display:none" onchange="ocrFilesSelected(this.files)">
         </div>
       </div>
-      <div id="ocr-thumbs" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:0"></div>
+
+      <div id="ocr-preview-section" style="display:none;margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <span style="font-size:14px;font-weight:700;color:var(--navy)">待辨識圖片 (<span id="ocr-count">0</span> 張)</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-outline btn-sm" onclick="clearOcrFiles()">清除全部</button>
+            <button class="btn btn-primary" id="ocr-run-btn" onclick="runOcr()">開始 AI 辨識</button>
+          </div>
+        </div>
+        <div id="ocr-thumbs" style="display:flex;flex-wrap:wrap;gap:10px"></div>
+      </div>
+
+      <div id="ocr-results-section" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <span style="font-size:14px;font-weight:700;color:var(--navy)">辨識結果（已自動儲存至記錄）</span>
+          <button class="btn btn-outline btn-sm" onclick="exportOcrCsv()">匯出 CSV</button>
+        </div>
+        <div id="ocr-results-list"></div>
+      </div>
     </div>
 
-    <!-- Results -->
-    <div id="ocr-results-section" style="display:none">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <span style="font-size:14px;font-weight:700;color:var(--navy)">辨識結果</span>
-        <button class="btn btn-outline btn-sm" onclick="exportOcrCsv()">匯出 CSV</button>
+    <!-- History panel -->
+    <div id="ocr-panel-history" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <span style="font-size:13px;color:var(--muted)" id="ocr-hist-count">載入中...</span>
+        <button class="btn btn-outline btn-sm" onclick="exportHistoryCsv()">匯出全部 CSV</button>
       </div>
-      <div id="ocr-results-list"></div>
+      <div id="ocr-history-list"></div>
     </div>
 
   </div><!-- end page-ocr -->
@@ -470,8 +529,18 @@ let chartDonut   = null;
 let chartHbar    = null;
 
 // ── Navigation ────────────────────────────────────────────────
+function openSidebar() {
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebar-overlay').classList.add('open');
+}
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
 function showPage(page, e) {
   if (e) e.preventDefault();
+  closeSidebar();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
   ['records','charts','summary','ocr'].forEach(p =>
@@ -850,10 +919,20 @@ loadRecords();
 // ═══════════════════════════════════════════════════════════════
 // AI 報帳辨識
 // ═══════════════════════════════════════════════════════════════
-let ocrFiles  = [];
+let ocrFiles   = [];
 let ocrResults = [];
+let ocrHistory = [];  // loaded from DB
 
-function initOcr() {}
+// ── Sub-tab switch ─────────────────────────────────────────────
+function switchOcrTab(tab) {
+  ['upload','history'].forEach(t => {
+    document.getElementById('ocrtab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('ocr-panel-' + t).style.display = t === tab ? '' : 'none';
+  });
+  if (tab === 'history') loadOcrHistory();
+}
+
+function initOcr() { /* tab state persists */ }
 
 // ── Drop zone ─────────────────────────────────────────────────
 function dzOver(e) {
@@ -866,8 +945,7 @@ function dzLeave(e) {
   document.getElementById('drop-zone').style.background  = 'var(--bg)';
 }
 function dzDrop(e) {
-  e.preventDefault();
-  dzLeave(e);
+  e.preventDefault(); dzLeave(e);
   ocrFilesSelected(e.dataTransfer.files);
 }
 function ocrFilesSelected(fileList) {
@@ -875,7 +953,6 @@ function ocrFilesSelected(fileList) {
   ocrFiles = [...ocrFiles, ...imgs];
   renderOcrThumbs();
 }
-
 function renderOcrThumbs() {
   const wrap = document.getElementById('ocr-thumbs');
   wrap.innerHTML = '';
@@ -883,8 +960,7 @@ function renderOcrThumbs() {
     const url = URL.createObjectURL(f);
     const div = document.createElement('div');
     div.style.cssText = 'position:relative;width:100px;height:100px;border-radius:8px;overflow:hidden;border:1.5px solid var(--border);background:#000;flex-shrink:0';
-    div.innerHTML = `
-      <img src="${url}" style="width:100%;height:100%;object-fit:cover;opacity:.9">
+    div.innerHTML = `<img src="${url}" style="width:100%;height:100%;object-fit:cover;opacity:.9">
       <button onclick="removeOcrFile(${i})" style="position:absolute;top:3px;right:3px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.6);color:#fff;border:none;cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center">&times;</button>
       <div style="position:absolute;bottom:0;left:0;right:0;padding:3px 5px;background:rgba(0,0,0,.55);font-size:9px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${f.name}</div>`;
     wrap.appendChild(div);
@@ -892,11 +968,7 @@ function renderOcrThumbs() {
   document.getElementById('ocr-count').textContent = ocrFiles.length;
   document.getElementById('ocr-preview-section').style.display = ocrFiles.length ? '' : 'none';
 }
-
-function removeOcrFile(i) {
-  ocrFiles.splice(i, 1);
-  renderOcrThumbs();
-}
+function removeOcrFile(i) { ocrFiles.splice(i,1); renderOcrThumbs(); }
 function clearOcrFiles() {
   ocrFiles = [];
   renderOcrThumbs();
@@ -906,85 +978,186 @@ function clearOcrFiles() {
 // ── Run OCR ────────────────────────────────────────────────────
 async function runOcr() {
   if (!ocrFiles.length) { showToast('請先上傳圖片', 'error'); return; }
-
   const btn = document.getElementById('ocr-run-btn');
-  btn.disabled = true;
-  btn.textContent = '辨識中...';
-
+  btn.disabled = true; btn.textContent = '辨識中...';
   const fd = new FormData();
   ocrFiles.forEach(f => fd.append('files[]', f));
-
   try {
-    const res = await fetch('/api/ocr', { method: 'POST', body: fd });
+    const res  = await fetch('/api/ocr', { method: 'POST', body: fd });
     const data = await res.json();
     if (data.error) { showToast(data.error, 'error'); return; }
     ocrResults = data.results;
     renderOcrResults();
-    showToast(`辨識完成，共 ${ocrResults.length} 張`, 'success');
+    showToast(`辨識完成，共 ${ocrResults.length} 張，已存入記錄`, 'success');
   } catch(err) {
     showToast('辨識失敗：' + err.message, 'error');
   } finally {
-    btn.disabled = false;
-    btn.textContent = '開始 AI 辨識';
+    btn.disabled = false; btn.textContent = '開始 AI 辨識';
   }
 }
 
-// ── Render Results ─────────────────────────────────────────────
+// ── Render fresh OCR results (read-only preview) ───────────────
 function renderOcrResults() {
   const wrap = document.getElementById('ocr-results-list');
   wrap.innerHTML = '';
-  ocrResults.forEach((r, ri) => {
+  ocrResults.forEach(r => {
     const card = document.createElement('div');
-    card.className = 'card';
-    card.style.marginBottom = '16px';
-
+    card.className = 'card'; card.style.marginBottom = '16px';
     if (r.error) {
-      card.innerHTML = `
-        <div class="card-header" style="background:var(--red-light)">
-          <span class="card-title" style="color:var(--red)">${escHtml(r.filename)}</span>
-          <span style="font-size:12px;color:var(--red)">辨識失敗</span>
-        </div>
-        <div style="padding:16px 24px;font-size:13px;color:var(--red)">${escHtml(r.error)}</div>`;
+      card.innerHTML = `<div class="card-header" style="background:var(--red-light)"><span class="card-title" style="color:var(--red)">${escHtml(r.filename)}</span><span style="font-size:12px;color:var(--red)">辨識失敗</span></div><div style="padding:16px 24px;font-size:13px;color:var(--red)">${escHtml(r.error)}</div>`;
     } else {
-      const rows = (r.items || []).map(it => `
-        <tr>
-          <td>${escHtml(it.name || '')}</td>
-          <td style="text-align:center">${escHtml(String(it.qty ?? '—'))}</td>
-          <td style="text-align:right;font-family:'DM Mono',monospace">${fmtAmt(it.amount)}</td>
-        </tr>`).join('');
-
-      card.innerHTML = `
-        <div class="card-header">
-          <span class="card-title">${escHtml(r.filename)}</span>
-          <span style="font-size:13px;font-family:'DM Mono',monospace;font-weight:600;color:var(--green)">
-            總計 $${Number(r.total || 0).toLocaleString()}
-          </span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>品名</th><th style="text-align:center;width:80px">數量</th><th style="text-align:right;width:120px">金額</th></tr></thead>
-            <tbody>${rows || '<tr><td colspan="3" class="empty-state"><div class="empty-state-text">無辨識結果</div></td></tr>'}</tbody>
-            <tfoot>
-              <tr style="font-weight:600;background:var(--bg)">
-                <td colspan="2" style="padding:10px 16px;color:var(--navy)">合計</td>
-                <td style="text-align:right;padding:10px 16px;font-family:\'DM Mono\',monospace;color:var(--green)">$${Number(r.total || 0).toLocaleString()}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>`;
+      const rows = (r.items||[]).map(it=>`<tr><td>${escHtml(it.name||'')}</td><td style="text-align:center">${escHtml(String(it.qty??'—'))}</td><td style="text-align:right;font-family:'DM Mono',monospace">${fmtAmt(it.amount)}</td></tr>`).join('');
+      card.innerHTML = `<div class="card-header"><span class="card-title">${escHtml(r.filename)}</span><span style="font-size:13px;font-family:'DM Mono',monospace;font-weight:600;color:var(--green)">總計 $${Number(r.total||0).toLocaleString()}</span></div><div class="table-wrap"><table><thead><tr><th>品名</th><th style="text-align:center;width:80px">數量</th><th style="text-align:right;width:120px">金額</th></tr></thead><tbody>${rows||'<tr><td colspan="3" class="empty-state"><div class="empty-state-text">無辨識結果</div></td></tr>'}</tbody><tfoot><tr style="font-weight:600;background:var(--bg)"><td colspan="2" style="padding:10px 16px;color:var(--navy)">合計</td><td style="text-align:right;padding:10px 16px;font-family:'DM Mono',monospace;color:var(--green)">$${Number(r.total||0).toLocaleString()}</td></tr></tfoot></table></div>`;
     }
     wrap.appendChild(card);
   });
   document.getElementById('ocr-results-section').style.display = '';
 }
 
-function fmtAmt(v) {
-  if (v === null || v === undefined) return '—';
-  const n = Number(v);
-  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString();
+// ── History CRUD ───────────────────────────────────────────────
+async function loadOcrHistory() {
+  document.getElementById('ocr-hist-count').textContent = '載入中...';
+  try {
+    const res = await fetch('/api/ocr-records');
+    ocrHistory = await res.json();
+    renderOcrHistory();
+  } catch(e) { showToast('載入記錄失敗', 'error'); }
 }
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function renderOcrHistory() {
+  const wrap = document.getElementById('ocr-history-list');
+  wrap.innerHTML = '';
+  document.getElementById('ocr-hist-count').textContent = `共 ${ocrHistory.length} 筆記錄`;
+  if (!ocrHistory.length) {
+    wrap.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--muted)">尚無辨識記錄</div>';
+    return;
+  }
+  ocrHistory.forEach(rec => {
+    const card = buildHistoryCard(rec);
+    wrap.appendChild(card);
+  });
+}
+
+function buildHistoryCard(rec) {
+  const card = document.createElement('div');
+  card.className = 'card'; card.style.marginBottom = '16px';
+  card.id = `hr-${rec.id}`;
+  redrawHistoryCard(card, rec);
+  return card;
+}
+
+function redrawHistoryCard(card, rec) {
+  const dt = rec.scanned_at ? rec.scanned_at.slice(0,16).replace('T',' ') : '';
+  const total = Number(rec.total||0);
+
+  // Build editable rows
+  const items = rec.items || [];
+  const rowsHtml = items.map((it, i) => `
+    <tr id="hr-${rec.id}-row-${i}">
+      <td><input class="ocr-edit-input" value="${escHtml(String(it.name||''))}" onchange="ocrItemChange(${rec.id},${i},'name',this.value)" placeholder="品名"></td>
+      <td style="width:80px"><input class="ocr-edit-input num" value="${escHtml(String(it.qty??''))}" onchange="ocrItemChange(${rec.id},${i},'qty',this.value)" placeholder="數量" style="text-align:center"></td>
+      <td style="width:130px"><input class="ocr-edit-input num" type="number" value="${it.amount??0}" onchange="ocrItemChange(${rec.id},${i},'amount',this.value)" style="text-align:right"></td>
+      <td style="width:36px;text-align:center"><button class="ocr-row-del" onclick="ocrDeleteRow(${rec.id},${i})" title="刪除此行">&times;</button></td>
+    </tr>`).join('');
+
+  card.innerHTML = `
+    <div class="card-header">
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <input class="ocr-edit-input" style="font-size:14px;font-weight:700;color:var(--navy);width:300px" value="${escHtml(rec.filename||'')}" onchange="ocrFieldChange(${rec.id},'filename',this.value)" placeholder="檔案名稱">
+        <span style="font-size:11px;color:var(--muted)">${dt}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:13px;font-family:'DM Mono',monospace;font-weight:600;color:var(--green)" id="hr-total-${rec.id}">總計 $${total.toLocaleString()}</span>
+        <button class="btn btn-primary btn-sm" onclick="saveOcrRecord(${rec.id})">儲存</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteOcrRecord(${rec.id})">刪除</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>品名</th><th style="text-align:center;width:80px">數量</th><th style="text-align:right;width:130px">金額</th><th style="width:36px"></th></tr></thead>
+        <tbody id="hr-tbody-${rec.id}">${rowsHtml}</tbody>
+      </table>
+      <div style="padding:10px 16px;border-top:1px solid var(--border)">
+        <button class="btn btn-outline btn-sm" onclick="ocrAddRow(${rec.id})">＋ 新增品項</button>
+      </div>
+    </div>`;
+}
+
+// Track in-memory edits per record
+const ocrEdits = {};  // { id: { items: [...], filename: '...' } }
+
+function getOcrEdit(id) {
+  if (!ocrEdits[id]) {
+    const rec = ocrHistory.find(r => r.id === id);
+    ocrEdits[id] = { filename: rec.filename, items: JSON.parse(JSON.stringify(rec.items||[])) };
+  }
+  return ocrEdits[id];
+}
+function updateTotalDisplay(id) {
+  const edit = getOcrEdit(id);
+  const total = edit.items.reduce((s,it) => s + (Number(it.amount)||0), 0);
+  const el = document.getElementById(`hr-total-${id}`);
+  if (el) el.textContent = `總計 $${total.toLocaleString()}`;
+}
+function ocrItemChange(id, i, field, val) {
+  const edit = getOcrEdit(id);
+  if (field === 'amount') edit.items[i].amount = Number(val)||0;
+  else edit.items[i][field] = val;
+  updateTotalDisplay(id);
+}
+function ocrFieldChange(id, field, val) {
+  getOcrEdit(id)[field] = val;
+}
+function ocrDeleteRow(id, i) {
+  const edit = getOcrEdit(id);
+  edit.items.splice(i, 1);
+  // Re-render just this card
+  const rec = ocrHistory.find(r => r.id === id);
+  const merged = { ...rec, ...edit };
+  const card = document.getElementById(`hr-${id}`);
+  redrawHistoryCard(card, merged);
+  // Re-attach edit state
+  ocrEdits[id] = edit;
+  updateTotalDisplay(id);
+}
+function ocrAddRow(id) {
+  const edit = getOcrEdit(id);
+  edit.items.push({ name: '', qty: null, amount: 0 });
+  const rec = ocrHistory.find(r => r.id === id);
+  const merged = { ...rec, ...edit };
+  const card = document.getElementById(`hr-${id}`);
+  redrawHistoryCard(card, merged);
+  ocrEdits[id] = edit;
+  updateTotalDisplay(id);
+}
+async function saveOcrRecord(id) {
+  const edit = getOcrEdit(id);
+  const rec  = ocrHistory.find(r => r.id === id);
+  const body = { filename: edit.filename, items: edit.items };
+  try {
+    const res = await fetch(`/api/ocr-records/${id}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const updated = await res.json();
+    if (updated.error) { showToast(updated.error, 'error'); return; }
+    // Update local cache
+    const idx = ocrHistory.findIndex(r => r.id === id);
+    ocrHistory[idx] = updated;
+    delete ocrEdits[id];
+    showToast('已儲存', 'success');
+  } catch(e) { showToast('儲存失敗：' + e.message, 'error'); }
+}
+async function deleteOcrRecord(id) {
+  if (!confirm('確定刪除此筆記錄？')) return;
+  try {
+    await fetch(`/api/ocr-records/${id}`, { method: 'DELETE' });
+    ocrHistory = ocrHistory.filter(r => r.id !== id);
+    delete ocrEdits[id];
+    const card = document.getElementById(`hr-${id}`);
+    if (card) card.remove();
+    document.getElementById('ocr-hist-count').textContent = `共 ${ocrHistory.length} 筆記錄`;
+    showToast('已刪除', 'success');
+  } catch(e) { showToast('刪除失敗', 'error'); }
 }
 
 // ── CSV Export ─────────────────────────────────────────────────
@@ -993,17 +1166,40 @@ function exportOcrCsv() {
   let csv = '\uFEFF檔案名稱,品名,數量,金額\n';
   ocrResults.forEach(r => {
     if (r.error) { csv += `${r.filename},辨識失敗,,\n`; return; }
-    (r.items || []).forEach(it => {
-      csv += [r.filename, it.name, it.qty ?? '', it.amount ?? ''].map(v =>
-        `"${String(v).replace(/"/g,'""')}"`).join(',') + '\n';
+    (r.items||[]).forEach(it => {
+      csv += [r.filename, it.name, it.qty??'', it.amount??''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',') + '\n';
     });
     csv += `${r.filename},【合計】,,${r.total}\n`;
   });
+  dlCsv(csv, `ocr_results_${new Date().toISOString().slice(0,10)}.csv`);
+}
+function exportHistoryCsv() {
+  if (!ocrHistory.length) { showToast('尚無記錄', 'error'); return; }
+  let csv = '\uFEFF掃描時間,檔案名稱,品名,數量,金額\n';
+  ocrHistory.forEach(r => {
+    const dt = (r.scanned_at||'').slice(0,16);
+    (r.items||[]).forEach(it => {
+      csv += [dt, r.filename, it.name, it.qty??'', it.amount??''].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',') + '\n';
+    });
+    csv += `${dt},${r.filename},【合計】,,${r.total}\n`;
+  });
+  dlCsv(csv, `ocr_history_${new Date().toISOString().slice(0,10)}.csv`);
+}
+function dlCsv(csv, filename) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8'}));
-  a.download = `ocr_results_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
+  a.download = filename; a.click();
 }
+
+// ── Helpers ────────────────────────────────────────────────────
+function fmtAmt(v) {
+  if (v===null||v===undefined) return '—';
+  const n=Number(v); return (n<0?'-$':'$')+Math.abs(n).toLocaleString();
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 </script>
 </body>
 </html>

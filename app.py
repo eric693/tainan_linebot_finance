@@ -88,6 +88,16 @@ def init_db():
                     updated_at          TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ocr_records (
+                    id          SERIAL PRIMARY KEY,
+                    filename    TEXT,
+                    items       JSONB DEFAULT '[]',
+                    total       NUMERIC(12,2) DEFAULT 0,
+                    scanned_at  TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
         print("[OK] Database initialised")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -791,7 +801,98 @@ def api_ocr():
             results.append({'filename': filename, 'items': [], 'total': 0,
                             'error': str(e)})
 
-    return jsonify({'results': results})
+    # Persist to DB
+    import json as _json2
+    saved_ids = []
+    if DATABASE_URL:
+        for r in results:
+            try:
+                items_json = _json2.dumps(r.get('items', []), ensure_ascii=False)
+                with get_db() as conn:
+                    row = conn.execute(
+                        "INSERT INTO ocr_records (filename, items, total) VALUES (%s, %s::jsonb, %s) RETURNING id",
+                        (r['filename'], items_json, float(r.get('total') or 0))
+                    ).fetchone()
+                r['db_id'] = row['id']
+                saved_ids.append(row['id'])
+            except Exception as e:
+                r['save_error'] = str(e)
+
+    return jsonify({'results': results, 'saved_ids': saved_ids})
+
+
+
+# ─── OCR Records CRUD ─────────────────────────────────────────────────────────
+
+def ocr_row_to_dict(row):
+    import json as _j
+    if not row:
+        return None
+    d = dict(row)
+    if d.get('total') is not None:
+        d['total'] = float(d['total'])
+    if d.get('scanned_at'):
+        d['scanned_at'] = d['scanned_at'].isoformat()
+    if d.get('updated_at'):
+        d['updated_at'] = d['updated_at'].isoformat()
+    # items is already parsed by psycopg3 JSONB → Python list
+    if isinstance(d.get('items'), str):
+        try:
+            d['items'] = _j.loads(d['items'])
+        except Exception:
+            d['items'] = []
+    return d
+
+
+@app.route('/api/ocr-records', methods=['GET'])
+@login_required
+def api_ocr_list():
+    with get_db() as conn:
+        rows = conn.execute(
+            'SELECT * FROM ocr_records ORDER BY scanned_at DESC'
+        ).fetchall()
+    return jsonify([ocr_row_to_dict(r) for r in rows])
+
+
+@app.route('/api/ocr-records/<int:record_id>', methods=['GET'])
+@login_required
+def api_ocr_get(record_id):
+    with get_db() as conn:
+        row = conn.execute(
+            'SELECT * FROM ocr_records WHERE id=%s', (record_id,)
+        ).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(ocr_row_to_dict(row))
+
+
+@app.route('/api/ocr-records/<int:record_id>', methods=['PUT'])
+@login_required
+def api_ocr_update(record_id):
+    import json as _j
+    body = request.get_json(force=True)
+    items = body.get('items', [])
+    # Recalculate total from items
+    total = sum(float(it.get('amount') or 0) for it in items)
+    filename = body.get('filename')
+
+    items_json = _j.dumps(items, ensure_ascii=False)
+    with get_db() as conn:
+        row = conn.execute(
+            'UPDATE ocr_records SET items=%s::jsonb, total=%s, filename=%s, updated_at=NOW() WHERE id=%s RETURNING *',
+            (items_json, total, filename, record_id)
+        ).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(ocr_row_to_dict(row))
+
+
+@app.route('/api/ocr-records/<int:record_id>', methods=['DELETE'])
+@login_required
+def api_ocr_delete(record_id):
+    with get_db() as conn:
+        conn.execute('DELETE FROM ocr_records WHERE id=%s', (record_id,))
+    return jsonify({'deleted': record_id})
 
 
 @app.route('/')
