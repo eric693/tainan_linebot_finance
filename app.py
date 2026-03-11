@@ -117,11 +117,12 @@ def calculate_total(data: dict) -> float:
 init_db()
 
 # ─── User State with TTL ──────────────────────────────────────────────────────
-# Stored as { uid: { 'step': ..., 'date': ..., 'field': ..., 'ts': time() } }
-# Expires after 10 minutes so stale states don't block users after restarts.
+# Stored as { uid: { 'step': ..., 'date': ..., 'field': ..., 'pending': {...}, 'ts': time() } }
+# 'pending' holds unsaved field values until user presses confirm.
+# Expires after 30 minutes so stale states don't block users after restarts.
 
 _user_states: dict = {}
-STATE_TTL = 600  # 10 minutes
+STATE_TTL = 1800  # 30 minutes
 
 
 def get_state(uid: str) -> dict:
@@ -141,6 +142,39 @@ def set_state(uid: str, data: dict):
 
 def clear_state(uid: str):
     _user_states.pop(uid, None)
+
+
+def get_pending(uid: str, record_date: str) -> dict:
+    """Return pending (unsaved) field values for this user+date."""
+    state = get_state(uid)
+    if state.get('pending_date') == record_date:
+        return state.get('pending', {})
+    return {}
+
+
+def set_pending(uid: str, record_date: str, field_key: str, amount: float):
+    """Store a field value in pending without writing to DB."""
+    state = get_state(uid)
+    if state.get('pending_date') != record_date:
+        state = {}
+    pending = state.get('pending', {})
+    pending[field_key] = amount
+    set_state(uid, {**state, 'pending_date': record_date, 'pending': pending})
+
+
+def clear_pending(uid: str):
+    state = get_state(uid)
+    state.pop('pending', None)
+    state.pop('pending_date', None)
+    if state:
+        set_state(uid, state)
+
+
+def merge_pending_to_record(pending: dict, record: dict) -> dict:
+    """Overlay pending values onto the saved DB record for display."""
+    merged = dict(record or {})
+    merged.update(pending)
+    return merged
 
 # ─── Flex Builders ────────────────────────────────────────────────────────────
 
@@ -203,6 +237,9 @@ def make_field_flex(record_date, record=None):
         })
 
     total = calculate_total(record)
+    # Count how many fields have been filled
+    filled = sum(1 for f in FIELDS if float(record.get(f['key']) or 0) != 0)
+    confirm_label = f"確認送出（已填 {filled} 項）" if filled > 0 else "確認送出"
     rows += [
         {"type": "separator", "margin": "lg"},
         {"type": "box", "layout": "horizontal", "margin": "lg", "contents": [
@@ -212,8 +249,8 @@ def make_field_flex(record_date, record=None):
              "color": "#1a2744", "align": "end", "flex": 1}
         ]},
         {"type": "button", "margin": "lg",
-         "action": {"type": "postback", "label": "完成記帳",
-                    "data": f"action=done&date={record_date}"},
+         "action": {"type": "postback", "label": confirm_label,
+                    "data": f"action=confirm&date={record_date}"},
          "style": "primary", "color": "#1a2744", "height": "sm"}
     ]
     return {
@@ -419,21 +456,32 @@ def handle_message(event):
         field_key   = state['field']
         field_label = FIELD_MAP[field_key]['label']
         try:
-            record = update_record_field(record_date, field_key, amount)
-            clear_state(uid)
+            # Store in pending — don't write to DB yet
+            set_pending(uid, record_date, field_key, amount)
+            # Clear the input step but keep pending
+            state2 = get_state(uid)
+            state2.pop('step', None)
+            state2.pop('field', None)
+            set_state(uid, state2)
+
+            # Build display record: saved DB values merged with pending
+            db_record = get_or_create_record(record_date)
+            pending   = get_pending(uid, record_date)
+            display   = merge_pending_to_record(pending, db_record)
+
             line_bot_api.reply_message(
                 event.reply_token,
                 FlexSendMessage(
-                    alt_text="記帳成功",
-                    contents=make_confirm_flex(record_date, field_label, amount, record)
+                    alt_text=f"{field_label} 已填 ${int(amount):,}，繼續填寫或確認送出",
+                    contents=make_field_flex(record_date, display)
                 )
             )
         except Exception as e:
-            print(f"[ERROR] update_record_field: {e}\n{traceback.format_exc()}")
+            print(f"[ERROR] handle input: {e}\n{traceback.format_exc()}")
             clear_state(uid)
             line_bot_api.reply_message(
                 event.reply_token,
-                TextSendMessage(text="記帳失敗，請重新操作")
+                TextSendMessage(text="操作失敗，請重新操作")
             )
         return
 
@@ -454,11 +502,17 @@ def handle_postback(event):
         if action == 'select_date':
             params = event.postback.params or {}
             record_date = params.get('date') or str(date.today())
-            record = get_or_create_record(record_date)
+            # Clear any stale pending from a different date
+            state = get_state(uid)
+            if state.get('pending_date') != record_date:
+                clear_pending(uid)
+            db_record = get_or_create_record(record_date)
+            pending   = get_pending(uid, record_date)
+            display   = merge_pending_to_record(pending, db_record)
             line_bot_api.reply_message(
                 event.reply_token,
                 FlexSendMessage(alt_text=f"{record_date} 記帳",
-                                contents=make_field_flex(record_date, record))
+                                contents=make_field_flex(record_date, display))
             )
 
         elif action == 'input_field':
@@ -466,7 +520,9 @@ def handle_postback(event):
             field_key   = data.get('field')
             if not record_date or field_key not in FIELD_MAP:
                 raise ValueError(f"invalid field or date: {data}")
-            set_state(uid, {'step': 'input_amount', 'date': record_date, 'field': field_key})
+            # Preserve existing pending when setting input step
+            state = get_state(uid)
+            set_state(uid, {**state, 'step': 'input_amount', 'date': record_date, 'field': field_key})
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text=f"請輸入【{FIELD_MAP[field_key]['label']}】的金額：")
@@ -474,20 +530,53 @@ def handle_postback(event):
 
         elif action == 'continue':
             record_date = data.get('date')
-            record = get_or_create_record(record_date)
+            db_record = get_or_create_record(record_date)
+            pending   = get_pending(uid, record_date)
+            display   = merge_pending_to_record(pending, db_record)
             line_bot_api.reply_message(
                 event.reply_token,
                 FlexSendMessage(alt_text=f"{record_date} 記帳",
-                                contents=make_field_flex(record_date, record))
+                                contents=make_field_flex(record_date, display))
             )
 
-        elif action == 'done':
+        elif action == 'confirm':
+            # Write all pending values to DB at once, then show summary
             record_date = data.get('date')
-            record = get_or_create_record(record_date)
+            db_record = get_or_create_record(record_date)
+            pending   = get_pending(uid, record_date)
+            if pending:
+                # Merge pending into DB record and save everything
+                merged = merge_pending_to_record(pending, db_record)
+                with get_db() as conn:
+                    set_clause = ', '.join([f'{k}=%s' for k in FIELD_KEYS])
+                    vals  = [float(merged.get(k) or 0) for k in FIELD_KEYS]
+                    total = calculate_total(merged)
+                    row   = conn.execute(
+                        f'UPDATE records SET {set_clause}, total_income=%s, updated_at=NOW() '
+                        f'WHERE record_date=%s RETURNING *',
+                        vals + [total, record_date]
+                    ).fetchone()
+                saved_record = row_to_dict(row)
+                clear_pending(uid)
+            else:
+                saved_record = db_record
+
             line_bot_api.reply_message(
                 event.reply_token,
                 FlexSendMessage(alt_text=f"{record_date} 記帳完成",
-                                contents=make_summary_flex(record_date, record))
+                                contents=make_summary_flex(record_date, saved_record))
+            )
+
+        elif action == 'done':
+            # Legacy fallback — same as confirm
+            record_date = data.get('date')
+            db_record = get_or_create_record(record_date)
+            pending   = get_pending(uid, record_date)
+            display   = merge_pending_to_record(pending, db_record)
+            line_bot_api.reply_message(
+                event.reply_token,
+                FlexSendMessage(alt_text=f"{record_date} 記帳完成",
+                                contents=make_summary_flex(record_date, display))
             )
 
     except Exception as e:
