@@ -721,9 +721,9 @@ def api_ocr():
     """
     import base64, json as _json, urllib.error
 
-    openai_key = request.form.get('openai_key', '').strip()
+    openai_key = os.environ.get('OPENAI_API_KEY', '').strip()
     if not openai_key:
-        return jsonify({'error': 'OpenAI API key is required'}), 400
+        return jsonify({'error': 'OPENAI_API_KEY 尚未設定，請至 Render 環境變數新增'}), 400
 
     files = request.files.getlist('files[]')
     if not files:
