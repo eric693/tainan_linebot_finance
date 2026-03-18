@@ -159,6 +159,28 @@ def init_db():
                     created_at  TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS punch_staff (
+                    id          SERIAL PRIMARY KEY,
+                    name        TEXT NOT NULL UNIQUE,
+                    pin         TEXT DEFAULT '',
+                    role        TEXT DEFAULT '',
+                    active      BOOLEAN DEFAULT TRUE,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS punch_records (
+                    id            SERIAL PRIMARY KEY,
+                    staff_id      INT REFERENCES punch_staff(id) ON DELETE CASCADE,
+                    punch_type    TEXT NOT NULL,
+                    punched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    note          TEXT DEFAULT '',
+                    is_manual     BOOLEAN DEFAULT FALSE,
+                    manual_by     TEXT DEFAULT '',
+                    created_at    TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
         print("[OK] Database initialised")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -1298,6 +1320,264 @@ def api_inv_profit():
             'cost_out': float(r['total_out']) * float(r['unit_cost']),
         } for r in items]
     }
+    return jsonify(result)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Punch Clock API
+# ═══════════════════════════════════════════════════════════════════
+
+def punch_staff_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    return d
+
+def punch_record_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('punched_at'): d['punched_at'] = d['punched_at'].isoformat()
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    return d
+
+# ── Public punch page (no login required) ─────────────────────────
+
+@app.route('/punch')
+def punch_page():
+    return render_template('punch.html')
+
+@app.route('/api/punch/staff-public', methods=['GET'])
+def api_punch_staff_public():
+    """Return active staff list for punch page (no PIN exposed)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, name, role FROM punch_staff WHERE active=TRUE ORDER BY name"
+        ).fetchall()
+    return jsonify([{'id': r['id'], 'name': r['name'], 'role': r['role']} for r in rows])
+
+@app.route('/api/punch/clock', methods=['POST'])
+def api_punch_clock():
+    """Public punch endpoint — verifies PIN if set."""
+    import pytz
+    b = request.get_json(force=True)
+    staff_id   = b.get('staff_id')
+    punch_type = b.get('punch_type')   # 'in' | 'out' | 'break_out' | 'break_in'
+    pin_input  = b.get('pin', '').strip()
+
+    if not staff_id or punch_type not in ('in', 'out', 'break_out', 'break_in'):
+        return jsonify({'error': '參數錯誤'}), 400
+
+    with get_db() as conn:
+        staff = conn.execute(
+            "SELECT * FROM punch_staff WHERE id=%s AND active=TRUE", (staff_id,)
+        ).fetchone()
+        if not staff:
+            return jsonify({'error': '員工不存在'}), 404
+
+        # PIN check
+        if staff['pin'] and staff['pin'] != pin_input:
+            return jsonify({'error': 'PIN 錯誤'}), 403
+
+        # Prevent duplicate in/out within 1 minute
+        recent = conn.execute("""
+            SELECT id FROM punch_records
+            WHERE staff_id=%s AND punch_type=%s
+              AND punched_at > NOW() - INTERVAL '1 minute'
+        """, (staff_id, punch_type)).fetchone()
+        if recent:
+            return jsonify({'error': '1 分鐘內已打過卡'}), 429
+
+        row = conn.execute("""
+            INSERT INTO punch_records (staff_id, punch_type, note)
+            VALUES (%s, %s, '') RETURNING *
+        """, (staff_id, punch_type)).fetchone()
+
+    d = punch_record_row(row)
+    d['staff_name'] = staff['name']
+    return jsonify(d), 201
+
+@app.route('/api/punch/today', methods=['GET'])
+def api_punch_today():
+    """Return today's punches for a staff (for punch page display)."""
+    staff_id = request.args.get('staff_id')
+    if not staff_id:
+        return jsonify([])
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT pr.*, ps.name as staff_name
+            FROM punch_records pr JOIN punch_staff ps ON ps.id=pr.staff_id
+            WHERE pr.staff_id=%s
+              AND pr.punched_at::date = NOW()::date
+            ORDER BY pr.punched_at ASC
+        """, (staff_id,)).fetchall()
+    return jsonify([punch_record_row(r) for r in rows])
+
+# ── Admin punch staff CRUD ─────────────────────────────────────────
+
+@app.route('/api/punch/staff', methods=['GET'])
+@login_required
+def api_punch_staff_list():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM punch_staff ORDER BY name"
+        ).fetchall()
+    return jsonify([punch_staff_row(r) for r in rows])
+
+@app.route('/api/punch/staff', methods=['POST'])
+@login_required
+def api_punch_staff_create():
+    b = request.get_json(force=True)
+    if not b.get('name','').strip():
+        return jsonify({'error': '姓名為必填'}), 400
+    try:
+        with get_db() as conn:
+            row = conn.execute("""
+                INSERT INTO punch_staff (name, pin, role)
+                VALUES (%s, %s, %s) RETURNING *
+            """, (b['name'].strip(), b.get('pin','').strip(), b.get('role','').strip())
+            ).fetchone()
+        return jsonify(punch_staff_row(row)), 201
+    except psycopg.errors.UniqueViolation:
+        return jsonify({'error': '員工姓名已存在'}), 409
+
+@app.route('/api/punch/staff/<int:sid>', methods=['PUT'])
+@login_required
+def api_punch_staff_update(sid):
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE punch_staff SET name=%s, pin=%s, role=%s, active=%s
+            WHERE id=%s RETURNING *
+        """, (b.get('name','').strip(), b.get('pin','').strip(),
+              b.get('role','').strip(), bool(b.get('active', True)), sid)
+        ).fetchone()
+    return jsonify(punch_staff_row(row)) if row else ('', 404)
+
+@app.route('/api/punch/staff/<int:sid>', methods=['DELETE'])
+@login_required
+def api_punch_staff_delete(sid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM punch_staff WHERE id=%s", (sid,))
+    return jsonify({'deleted': sid})
+
+# ── Admin punch records ────────────────────────────────────────────
+
+@app.route('/api/punch/records', methods=['GET'])
+@login_required
+def api_punch_records():
+    staff_id  = request.args.get('staff_id')
+    date_from = request.args.get('date_from')
+    date_to   = request.args.get('date_to')
+    month     = request.args.get('month')        # YYYY-MM
+
+    conds = ["TRUE"]
+    params = []
+    if staff_id:
+        conds.append("pr.staff_id = %s"); params.append(int(staff_id))
+    if month:
+        conds.append("TO_CHAR(pr.punched_at, 'YYYY-MM') = %s"); params.append(month)
+    elif date_from:
+        conds.append("pr.punched_at::date >= %s"); params.append(date_from)
+        if date_to:
+            conds.append("pr.punched_at::date <= %s"); params.append(date_to)
+
+    where = " AND ".join(conds)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT pr.*, ps.name as staff_name, ps.role as staff_role
+            FROM punch_records pr JOIN punch_staff ps ON ps.id=pr.staff_id
+            WHERE {where}
+            ORDER BY pr.punched_at DESC
+            LIMIT 500
+        """, params).fetchall()
+    return jsonify([punch_record_row(r) for r in rows])
+
+@app.route('/api/punch/records', methods=['POST'])
+@login_required
+def api_punch_record_manual():
+    """Admin manual / correction punch."""
+    b = request.get_json(force=True)
+    staff_id   = b.get('staff_id')
+    punch_type = b.get('punch_type')
+    punched_at = b.get('punched_at')    # ISO string
+    note       = b.get('note', '').strip()
+    manual_by  = b.get('manual_by', '').strip()
+
+    if not all([staff_id, punch_type, punched_at]):
+        return jsonify({'error': '缺少必要欄位'}), 400
+    if punch_type not in ('in', 'out', 'break_out', 'break_in'):
+        return jsonify({'error': '無效的打卡類型'}), 400
+
+    with get_db() as conn:
+        row = conn.execute("""
+            INSERT INTO punch_records (staff_id, punch_type, punched_at, note, is_manual, manual_by)
+            VALUES (%s, %s, %s, %s, TRUE, %s) RETURNING *
+        """, (staff_id, punch_type, punched_at, note, manual_by)).fetchone()
+        staff = conn.execute("SELECT name FROM punch_staff WHERE id=%s", (staff_id,)).fetchone()
+    d = punch_record_row(row)
+    if staff: d['staff_name'] = staff['name']
+    return jsonify(d), 201
+
+@app.route('/api/punch/records/<int:rid>', methods=['PUT'])
+@login_required
+def api_punch_record_update(rid):
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE punch_records
+            SET punch_type=%s, punched_at=%s, note=%s, is_manual=TRUE, manual_by=%s
+            WHERE id=%s RETURNING *
+        """, (b.get('punch_type'), b.get('punched_at'),
+              b.get('note',''), b.get('manual_by',''), rid)).fetchone()
+    return jsonify(punch_record_row(row)) if row else ('', 404)
+
+@app.route('/api/punch/records/<int:rid>', methods=['DELETE'])
+@login_required
+def api_punch_record_delete(rid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM punch_records WHERE id=%s", (rid,))
+    return jsonify({'deleted': rid})
+
+@app.route('/api/punch/summary', methods=['GET'])
+@login_required
+def api_punch_summary():
+    """Daily summary: pair in/out per staff per day."""
+    month = request.args.get('month')   # YYYY-MM, defaults to current
+    if not month:
+        from datetime import datetime
+        month = datetime.now().strftime('%Y-%m')
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT
+                ps.id as staff_id,
+                ps.name as staff_name,
+                pr.punched_at::date as work_date,
+                MIN(CASE WHEN pr.punch_type='in'  THEN pr.punched_at END) as clock_in,
+                MAX(CASE WHEN pr.punch_type='out' THEN pr.punched_at END) as clock_out,
+                COUNT(*) as punch_count,
+                BOOL_OR(pr.is_manual) as has_manual
+            FROM punch_records pr
+            JOIN punch_staff ps ON ps.id=pr.staff_id
+            WHERE TO_CHAR(pr.punched_at, 'YYYY-MM') = %s
+            GROUP BY ps.id, ps.name, pr.punched_at::date
+            ORDER BY pr.punched_at::date DESC, ps.name
+        """, (month,)).fetchall()
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        d['work_date']  = d['work_date'].isoformat() if d['work_date'] else None
+        d['clock_in']   = d['clock_in'].isoformat()  if d['clock_in']  else None
+        d['clock_out']  = d['clock_out'].isoformat() if d['clock_out'] else None
+        # Work duration in minutes
+        if d['clock_in'] and d['clock_out']:
+            from datetime import datetime as _dt
+            ci = _dt.fromisoformat(d['clock_in'].replace('Z',''))
+            co = _dt.fromisoformat(d['clock_out'].replace('Z',''))
+            d['duration_min'] = max(0, int((co - ci).total_seconds() / 60))
+        else:
+            d['duration_min'] = None
+        result.append(d)
     return jsonify(result)
 
 @app.route('/')

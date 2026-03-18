@@ -72,6 +72,14 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 .recipe-ing-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
 .recipe-ing-row select, .recipe-ing-row input { flex:1; }
 
+
+/* ── Punch module ── */
+.punch-status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+.punch-status-in  { background:var(--green); }
+.punch-status-out { background:var(--red); }
+.punch-manual-badge { font-size:10px; padding:1px 6px; background:#f0f4ff; color:var(--accent); border-radius:8px; margin-left:4px; }
+.summary-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; margin-bottom:20px; }
+
 /* OCR sub-tabs */
 .ocr-tab { padding: 9px 20px; font-size: 13px; font-weight: 500; font-family: 'Noto Sans TC', sans-serif; background: transparent; border: none; border-bottom: 3px solid transparent; color: var(--muted); cursor: pointer; transition: all 0.15s; margin-bottom: -2px; }
 .ocr-tab:hover { color: var(--text); }
@@ -237,6 +245,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <a href="#" class="nav-item"        id="nav-summary" onclick="showPage('summary',event)">欄位統計</a>
     <a href="#" class="nav-item"        id="nav-ocr"     onclick="showPage('ocr',event)">AI 報帳辨識</a>
     <a href="#" class="nav-item"        id="nav-inv"     onclick="showPage('inv',event)">庫存管理</a>
+    <a href="#" class="nav-item"        id="nav-punch"   onclick="showPage('punch',event)">打卡管理</a>
   </nav>
   <div class="sidebar-bottom">
     <a href="/admin/logout" class="logout-btn">登出系統</a>
@@ -599,8 +608,221 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     </div>
 
   </div><!-- end page-inv -->
+
+  <!-- ── 打卡管理 ──────────────────────────── -->
+  <div class="page" id="page-punch" style="display:none">
+
+    <div class="inv-tab-bar">
+      <button class="inv-tab active" id="punchtab-summary"  onclick="switchPunchTab('summary')">出勤摘要</button>
+      <button class="inv-tab"        id="punchtab-records"  onclick="switchPunchTab('records')">打卡記錄</button>
+      <button class="inv-tab"        id="punchtab-manual"   onclick="switchPunchTab('manual')">補打卡</button>
+      <button class="inv-tab"        id="punchtab-staff"    onclick="switchPunchTab('staff')">員工管理</button>
+    </div>
+
+    <!-- ── 出勤摘要 ── -->
+    <div id="punch-panel-summary">
+      <div class="filter-bar" style="margin-bottom:20px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="sum-month" onchange="loadPunchSummary()">
+        <span style="flex:1"></span>
+        <a href="/punch" target="_blank" class="btn btn-primary btn-sm">開啟打卡頁</a>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>員工</th>
+                <th>上班</th>
+                <th>下班</th>
+                <th>工時</th>
+                <th>補打卡</th>
+              </tr>
+            </thead>
+            <tbody id="sum-tbody">
+              <tr><td colspan="6" class="empty-state"><div class="empty-state-text">請選擇月份</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 打卡記錄 ── -->
+    <div id="punch-panel-records" style="display:none">
+      <div class="filter-bar" style="margin-bottom:20px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">員工</span>
+        <select class="filter-input" id="rec-filter-staff" onchange="loadPunchRecords()" style="min-width:120px">
+          <option value="">全部</option>
+        </select>
+        <div class="filter-divider"></div>
+        <span class="filter-label">日期</span>
+        <input class="filter-input" type="date" id="rec-filter-from" onchange="loadPunchRecords()">
+        <span class="filter-sep">—</span>
+        <input class="filter-input" type="date" id="rec-filter-to" onchange="loadPunchRecords()">
+        <div class="filter-divider"></div>
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="rec-filter-month" onchange="recMonthChange()">
+        <button class="btn btn-ghost btn-sm" onclick="clearRecFilter()">清除</button>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">打卡記錄</span>
+          <span id="rec-count" style="font-size:12px;color:var(--muted)"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>時間</th><th>員工</th><th>職稱</th><th>類型</th><th>備註</th><th>補打</th><th>操作</th></tr></thead>
+            <tbody id="rec-tbody">
+              <tr><td colspan="7" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 補打卡 ── -->
+    <div id="punch-panel-manual" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px" id="manual-grid">
+        <div class="card" style="padding:24px">
+          <div class="card-title" style="margin-bottom:18px;padding:0">新增補打卡</div>
+          <div style="margin-bottom:14px">
+            <label class="form-label">員工</label>
+            <select class="form-input" id="man-staff" style="width:100%"></select>
+          </div>
+          <div style="margin-bottom:14px">
+            <label class="form-label">打卡類型</label>
+            <select class="form-input" id="man-type" style="width:100%">
+              <option value="in">上班打卡</option>
+              <option value="out">下班打卡</option>
+              <option value="break_out">休息開始</option>
+              <option value="break_in">休息結束</option>
+            </select>
+          </div>
+          <div style="margin-bottom:14px">
+            <label class="form-label">補打時間</label>
+            <input class="form-input" type="datetime-local" id="man-time" style="width:100%">
+          </div>
+          <div style="margin-bottom:14px">
+            <label class="form-label">操作人員</label>
+            <input class="form-input" id="man-by" placeholder="管理員姓名" style="width:100%">
+          </div>
+          <div style="margin-bottom:20px">
+            <label class="form-label">補打原因</label>
+            <input class="form-input" id="man-note" placeholder="例：忘記打卡" style="width:100%">
+          </div>
+          <button class="btn btn-primary" style="width:100%" onclick="submitManualPunch()">送出補打卡</button>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">近期補打記錄</span></div>
+          <div class="table-wrap" style="max-height:400px;overflow-y:auto">
+            <table>
+              <thead><tr><th>時間</th><th>員工</th><th>類型</th><th>操作人</th><th>原因</th></tr></thead>
+              <tbody id="manual-tbody">
+                <tr><td colspan="5" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 員工管理 ── -->
+    <div id="punch-panel-staff" style="display:none">
+      <div class="section-head">
+        <span id="punch-staff-count" style="font-size:13px;color:var(--muted)"></span>
+        <button class="btn btn-primary" onclick="openPunchStaffModal()">新增員工</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>姓名</th><th>職稱</th><th>PIN</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="punch-staff-tbody">
+              <tr><td colspan="5" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end page-punch -->
+
 </main>
 
+
+
+<!-- Punch Staff Modal -->
+<div class="modal-overlay" id="punch-staff-modal" style="display:none">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <span class="modal-title" id="psm-title">新增員工</span>
+      <button class="modal-close" onclick="closePunchStaffModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="psm-id">
+      <div class="form-row">
+        <div><label class="form-label">姓名 *</label><input class="form-input" id="psm-name" placeholder="員工姓名"></div>
+        <div><label class="form-label">職稱</label><input class="form-input" id="psm-role" placeholder="例：外場、廚房"></div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label class="form-label">PIN（4 位數字）</label>
+          <input class="form-input" id="psm-pin" placeholder="不設定可留空" maxlength="4" type="text">
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">留空表示無需 PIN 即可打卡</div>
+        </div>
+        <div>
+          <label class="form-label">狀態</label>
+          <select class="form-input" id="psm-active">
+            <option value="1">在職</option>
+            <option value="0">停用</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closePunchStaffModal()">取消</button>
+      <button class="btn btn-primary" onclick="savePunchStaff()">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Punch Record Edit Modal -->
+<div class="modal-overlay" id="punch-rec-modal" style="display:none">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title">編輯打卡記錄</span>
+      <button class="modal-close" onclick="closePunchRecModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="prm-id">
+      <div style="margin-bottom:12px">
+        <label class="form-label">打卡類型</label>
+        <select class="form-input" id="prm-type" style="width:100%">
+          <option value="in">上班打卡</option>
+          <option value="out">下班打卡</option>
+          <option value="break_out">休息開始</option>
+          <option value="break_in">休息結束</option>
+        </select>
+      </div>
+      <div style="margin-bottom:12px">
+        <label class="form-label">打卡時間</label>
+        <input class="form-input" type="datetime-local" id="prm-time" style="width:100%">
+      </div>
+      <div style="margin-bottom:12px">
+        <label class="form-label">操作人員</label>
+        <input class="form-input" id="prm-by" placeholder="管理員姓名" style="width:100%">
+      </div>
+      <div>
+        <label class="form-label">備註</label>
+        <input class="form-input" id="prm-note" style="width:100%">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closePunchRecModal()">取消</button>
+      <button class="btn btn-primary" onclick="savePunchRec()">儲存</button>
+    </div>
+  </div>
+</div>
 
 <!-- Inventory Item Modal -->
 <div class="modal-overlay" id="inv-item-modal" style="display:none">
@@ -816,17 +1038,18 @@ function showPage(page, e) {
   closeSidebar();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
-  ['records','charts','summary','ocr','inv'].forEach(p =>
+  ['records','charts','summary','ocr','inv','punch'].forEach(p =>
     document.getElementById('page-' + p).style.display = p === page ? '' : 'none'
   );
   document.getElementById('page-title').textContent =
-    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理' }[page];
+    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理' }[page];
   document.getElementById('new-btn').style.display = page === 'records' ? '' : 'none';
   if (page === 'records') loadRecords();
   if (page === 'charts')  { initChartDefaults(); renderCharts(); }
   if (page === 'summary') loadSummary();
   if (page === 'ocr')     initOcr();
   if (page === 'inv')     initInv();
+  if (page === 'punch')   initPunch();
 }
 
 // ── Data ──────────────────────────────────────────────────────
@@ -1985,6 +2208,297 @@ async function loadInvProfit() {
     <td style="font-family:'DM Mono',monospace;text-align:right;color:var(--accent)">$${Number(i.cost_out).toLocaleString()}</td>
     <td style="font-family:'DM Mono',monospace;text-align:right;font-weight:600">${Number(i.current_stock).toLocaleString()} ${escHtml(i.unit_label)}</td>
   </tr>`).join('');
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 打卡管理模組
+// ═══════════════════════════════════════════════════════════════
+let punchStaffList  = [];
+let punchRecords    = [];
+let punchEditRecId  = null;
+let punchEditStaffId = null;
+
+const PUNCH_LABEL = { in:'上班打卡', out:'下班打卡', break_out:'休息開始', break_in:'休息結束' };
+const PUNCH_COLOR = { in:'var(--green)', out:'var(--red)', break_out:'#e07b2a', break_in:'var(--accent)' };
+
+function initPunch() {
+  // Default month to current
+  const now = new Date();
+  const ym  = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  document.getElementById('sum-month').value = ym;
+  switchPunchTab('summary');
+}
+
+function switchPunchTab(tab) {
+  ['summary','records','manual','staff'].forEach(t => {
+    document.getElementById('punchtab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('punch-panel-' + t).style.display = t === tab ? '' : 'none';
+  });
+  if (tab === 'summary') loadPunchSummary();
+  if (tab === 'records') { loadPunchStaffOptions(); loadPunchRecords(); }
+  if (tab === 'manual')  { loadManualStaffOptions(); loadManualRecords(); }
+  if (tab === 'staff')   loadPunchStaff();
+}
+
+// ── 出勤摘要 ──────────────────────────────────────────────────
+async function loadPunchSummary() {
+  const month = document.getElementById('sum-month').value;
+  if (!month) return;
+  const res  = await fetch(`/api/punch/summary?month=${month}`);
+  const data = await res.json();
+  const tb   = document.getElementById('sum-tbody');
+  if (!data.length) {
+    tb.innerHTML = '<tr><td colspan="6" class="empty-state"><div class="empty-state-text">該月無打卡記錄</div></td></tr>';
+    return;
+  }
+  tb.innerHTML = data.map(r => {
+    const ci = r.clock_in  ? r.clock_in.slice(11,16)  : '<span style="color:var(--muted)">—</span>';
+    const co = r.clock_out ? r.clock_out.slice(11,16) : '<span style="color:var(--muted)">—</span>';
+    let dur = '—';
+    if (r.duration_min !== null) {
+      const h = Math.floor(r.duration_min / 60);
+      const m = r.duration_min % 60;
+      dur = h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    return `<tr>
+      <td style="font-family:'DM Mono',monospace;font-size:12px;white-space:nowrap">${r.work_date||''}</td>
+      <td style="font-weight:600">${escHtml(r.staff_name)}</td>
+      <td style="font-family:'DM Mono',monospace;color:var(--green)">${ci}</td>
+      <td style="font-family:'DM Mono',monospace;color:var(--red)">${co}</td>
+      <td style="font-family:'DM Mono',monospace;font-weight:600">${dur}</td>
+      <td>${r.has_manual ? '<span class="punch-manual-badge">含補打</span>' : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── 打卡記錄 ──────────────────────────────────────────────────
+async function loadPunchStaffOptions(selId='rec-filter-staff') {
+  if (!punchStaffList.length) {
+    const res = await fetch('/api/punch/staff');
+    punchStaffList = await res.json();
+  }
+  const sel = document.getElementById(selId);
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">全部</option>' +
+    punchStaffList.map(s => `<option value="${s.id}" ${s.id==cur?'selected':''}>${escHtml(s.name)}</option>`).join('');
+}
+
+function recMonthChange() {
+  document.getElementById('rec-filter-from').value = '';
+  document.getElementById('rec-filter-to').value   = '';
+  loadPunchRecords();
+}
+
+async function loadPunchRecords() {
+  const staff = document.getElementById('rec-filter-staff').value;
+  const from  = document.getElementById('rec-filter-from').value;
+  const to    = document.getElementById('rec-filter-to').value;
+  const month = document.getElementById('rec-filter-month').value;
+
+  let url = '/api/punch/records?';
+  if (staff) url += `staff_id=${staff}&`;
+  if (month) url += `month=${month}&`;
+  else { if (from) url += `date_from=${from}&`; if (to) url += `date_to=${to}&`; }
+
+  const res = await fetch(url);
+  punchRecords = await res.json();
+  renderPunchRecords();
+}
+
+function clearRecFilter() {
+  ['rec-filter-staff','rec-filter-from','rec-filter-to','rec-filter-month'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  punchRecords = [];
+  renderPunchRecords();
+}
+
+function renderPunchRecords() {
+  const tb = document.getElementById('rec-tbody');
+  document.getElementById('rec-count').textContent = `共 ${punchRecords.length} 筆`;
+  if (!punchRecords.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="empty-state-text">無記錄</div></td></tr>';
+    return;
+  }
+  tb.innerHTML = punchRecords.map(r => {
+    const dt = r.punched_at ? r.punched_at.slice(0,16).replace('T',' ') : '';
+    const typeColor = PUNCH_COLOR[r.punch_type] || 'var(--text)';
+    return `<tr>
+      <td style="font-family:'DM Mono',monospace;font-size:12px;white-space:nowrap">${dt}</td>
+      <td style="font-weight:600">${escHtml(r.staff_name||'')}</td>
+      <td style="color:var(--muted);font-size:12px">${escHtml(r.staff_role||'')}</td>
+      <td><span style="color:${typeColor};font-weight:600;font-size:12px">${PUNCH_LABEL[r.punch_type]||r.punch_type}</span></td>
+      <td style="color:var(--muted);font-size:12px">${escHtml(r.note||'')}</td>
+      <td>${r.is_manual ? `<span class="punch-manual-badge">補打 ${escHtml(r.manual_by||'')}</span>` : ''}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="openPunchRecModal(${r.id})">編輯</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePunchRec(${r.id})" style="margin-left:4px">刪除</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function openPunchRecModal(id) {
+  const r = punchRecords.find(x => x.id === id);
+  if (!r) return;
+  punchEditRecId = id;
+  document.getElementById('prm-id').value   = id;
+  document.getElementById('prm-type').value = r.punch_type;
+  document.getElementById('prm-by').value   = r.manual_by || '';
+  document.getElementById('prm-note').value = r.note || '';
+  // Convert to local datetime-local
+  const dt = r.punched_at ? r.punched_at.slice(0,16) : '';
+  document.getElementById('prm-time').value = dt;
+  document.getElementById('punch-rec-modal').style.display = 'flex';
+}
+function closePunchRecModal() { document.getElementById('punch-rec-modal').style.display = 'none'; }
+async function savePunchRec() {
+  const id   = document.getElementById('prm-id').value;
+  const body = {
+    punch_type: document.getElementById('prm-type').value,
+    punched_at: document.getElementById('prm-time').value,
+    manual_by:  document.getElementById('prm-by').value.trim(),
+    note:       document.getElementById('prm-note').value.trim(),
+  };
+  const res = await fetch(`/api/punch/records/${id}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  if (!res.ok) { showToast('儲存失敗', 'error'); return; }
+  closePunchRecModal();
+  showToast('已更新', 'success');
+  await loadPunchRecords();
+}
+async function deletePunchRec(id) {
+  if (!confirm('確定刪除此打卡記錄？')) return;
+  await fetch(`/api/punch/records/${id}`, { method: 'DELETE' });
+  showToast('已刪除', 'success');
+  punchRecords = punchRecords.filter(r => r.id !== id);
+  renderPunchRecords();
+}
+
+// ── 補打卡 ────────────────────────────────────────────────────
+async function loadManualStaffOptions() {
+  if (!punchStaffList.length) {
+    const res = await fetch('/api/punch/staff');
+    punchStaffList = await res.json();
+  }
+  const sel = document.getElementById('man-staff');
+  sel.innerHTML = punchStaffList
+    .filter(s => s.active)
+    .map(s => `<option value="${s.id}">${escHtml(s.name)}</option>`).join('');
+  // Default datetime = now
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset()*60000)
+    .toISOString().slice(0,16);
+  document.getElementById('man-time').value = local;
+}
+async function loadManualRecords() {
+  const res  = await fetch('/api/punch/records?');
+  const all  = await res.json();
+  const manuals = all.filter(r => r.is_manual).slice(0, 50);
+  const tb   = document.getElementById('manual-tbody');
+  if (!manuals.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty-state"><div class="empty-state-text">尚無補打記錄</div></td></tr>';
+    return;
+  }
+  tb.innerHTML = manuals.map(r => {
+    const dt = r.punched_at ? r.punched_at.slice(0,16).replace('T',' ') : '';
+    return `<tr>
+      <td style="font-size:11px;font-family:'DM Mono',monospace;white-space:nowrap">${dt}</td>
+      <td style="font-weight:600">${escHtml(r.staff_name||'')}</td>
+      <td style="color:${PUNCH_COLOR[r.punch_type]||'var(--text)'};font-size:12px;font-weight:600">${PUNCH_LABEL[r.punch_type]||r.punch_type}</td>
+      <td style="color:var(--muted)">${escHtml(r.manual_by||'')}</td>
+      <td style="color:var(--muted)">${escHtml(r.note||'')}</td>
+    </tr>`;
+  }).join('');
+}
+async function submitManualPunch() {
+  const staff_id   = document.getElementById('man-staff').value;
+  const punch_type = document.getElementById('man-type').value;
+  const punched_at = document.getElementById('man-time').value;
+  const manual_by  = document.getElementById('man-by').value.trim();
+  const note       = document.getElementById('man-note').value.trim();
+  if (!staff_id || !punched_at) { showToast('請填寫完整資料', 'error'); return; }
+  const res = await fetch('/api/punch/records', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ staff_id: parseInt(staff_id), punch_type, punched_at, manual_by, note })
+  });
+  const data = await res.json();
+  if (data.error) { showToast(data.error, 'error'); return; }
+  showToast('補打卡完成', 'success');
+  document.getElementById('man-note').value = '';
+  await loadManualRecords();
+}
+
+// ── 員工管理 ──────────────────────────────────────────────────
+async function loadPunchStaff() {
+  const res = await fetch('/api/punch/staff');
+  punchStaffList = await res.json();
+  const tb = document.getElementById('punch-staff-tbody');
+  document.getElementById('punch-staff-count').textContent = `共 ${punchStaffList.length} 位員工`;
+  if (!punchStaffList.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="empty-state"><div class="empty-state-text">尚無員工</div></td></tr>';
+    return;
+  }
+  tb.innerHTML = punchStaffList.map(s => `<tr>
+    <td style="font-weight:600">${escHtml(s.name)}</td>
+    <td style="color:var(--muted)">${escHtml(s.role||'')}</td>
+    <td style="font-family:'DM Mono',monospace">${s.pin ? '••••' : '<span style="color:var(--muted)">未設定</span>'}</td>
+    <td>${s.active
+      ? '<span class="badge badge-ok">在職</span>'
+      : '<span class="badge badge-warn">停用</span>'}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-outline btn-sm" onclick="openPunchStaffModal(${s.id})">編輯</button>
+      <button class="btn btn-danger btn-sm" onclick="deletePunchStaff(${s.id})" style="margin-left:4px">刪除</button>
+    </td>
+  </tr>`).join('');
+}
+function openPunchStaffModal(id=null) {
+  punchEditStaffId = id;
+  document.getElementById('psm-title').textContent = id ? '編輯員工' : '新增員工';
+  if (id) {
+    const s = punchStaffList.find(x => x.id === id);
+    if (!s) return;
+    document.getElementById('psm-id').value     = s.id;
+    document.getElementById('psm-name').value   = s.name;
+    document.getElementById('psm-role').value   = s.role || '';
+    document.getElementById('psm-pin').value    = '';
+    document.getElementById('psm-active').value = s.active ? '1' : '0';
+  } else {
+    ['psm-id','psm-name','psm-role','psm-pin'].forEach(i => document.getElementById(i).value = '');
+    document.getElementById('psm-active').value = '1';
+  }
+  document.getElementById('punch-staff-modal').style.display = 'flex';
+}
+function closePunchStaffModal() { document.getElementById('punch-staff-modal').style.display = 'none'; }
+async function savePunchStaff() {
+  const id   = document.getElementById('psm-id').value;
+  const pin  = document.getElementById('psm-pin').value.trim();
+  if (pin && !/^\d{4}$/.test(pin)) { showToast('PIN 必須為 4 位數字', 'error'); return; }
+  const body = {
+    name:   document.getElementById('psm-name').value.trim(),
+    role:   document.getElementById('psm-role').value.trim(),
+    pin:    pin,
+    active: document.getElementById('psm-active').value === '1',
+  };
+  if (!body.name) { showToast('請填寫姓名', 'error'); return; }
+  try {
+    const url  = id ? `/api/punch/staff/${id}` : '/api/punch/staff';
+    const meth = id ? 'PUT' : 'POST';
+    const res  = await fetch(url, { method: meth, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (data.error) { showToast(data.error, 'error'); return; }
+    closePunchStaffModal();
+    showToast(id ? '已更新' : '員工已新增', 'success');
+    await loadPunchStaff();
+  } catch(e) { showToast('儲存失敗', 'error'); }
+}
+async function deletePunchStaff(id) {
+  if (!confirm('確定刪除此員工？其所有打卡記錄也會一併刪除。')) return;
+  await fetch(`/api/punch/staff/${id}`, { method: 'DELETE' });
+  showToast('已刪除', 'success');
+  await loadPunchStaff();
 }
 
 </script>
