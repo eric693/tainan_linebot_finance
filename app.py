@@ -160,6 +160,16 @@ def init_db():
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS inv_settlements (
+                    id           SERIAL PRIMARY KEY,
+                    month        TEXT NOT NULL,
+                    settled_by   TEXT DEFAULT '',
+                    note         TEXT DEFAULT '',
+                    snapshot     JSONB DEFAULT '[]',
+                    settled_at   TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS punch_staff (
                     id          SERIAL PRIMARY KEY,
                     name        TEXT NOT NULL UNIQUE,
@@ -1101,20 +1111,33 @@ def api_inv_stock_adjust(item_id):
 @app.route('/api/inv/transactions', methods=['GET'])
 @login_required
 def api_inv_txns():
-    item_id = request.args.get('item_id')
+    item_id   = request.args.get('item_id')
+    month     = request.args.get('month')      # YYYY-MM
+    date_from = request.args.get('date_from')  # YYYY-MM-DD
+    date_to   = request.args.get('date_to')
+    txn_type  = request.args.get('txn_type')
+
+    conds  = ["TRUE"]
+    params = []
+    if item_id:
+        conds.append("t.item_id = %s"); params.append(int(item_id))
+    if month:
+        conds.append("TO_CHAR(t.created_at, 'YYYY-MM') = %s"); params.append(month)
+    elif date_from:
+        conds.append("t.created_at::date >= %s"); params.append(date_from)
+        if date_to:
+            conds.append("t.created_at::date <= %s"); params.append(date_to)
+    if txn_type:
+        conds.append("t.txn_type = %s"); params.append(txn_type)
+
+    where = " AND ".join(conds)
     with get_db() as conn:
-        if item_id:
-            rows = conn.execute("""
-                SELECT t.*, i.name as item_name, i.unit_label
-                FROM inv_transactions t JOIN inv_items i ON i.id=t.item_id
-                WHERE t.item_id=%s ORDER BY t.created_at DESC LIMIT 100
-            """, (item_id,)).fetchall()
-        else:
-            rows = conn.execute("""
-                SELECT t.*, i.name as item_name, i.unit_label
-                FROM inv_transactions t JOIN inv_items i ON i.id=t.item_id
-                ORDER BY t.created_at DESC LIMIT 200
-            """).fetchall()
+        rows = conn.execute(f"""
+            SELECT t.*, i.name as item_name, i.unit_label
+            FROM inv_transactions t JOIN inv_items i ON i.id=t.item_id
+            WHERE {where}
+            ORDER BY t.created_at DESC LIMIT 500
+        """, params).fetchall()
     return jsonify([inv_txn_row(r) for r in rows])
 
 # ── Recipes ────────────────────────────────────────────────────────
@@ -1126,12 +1149,33 @@ def recipe_with_items(conn, recipe_id):
     if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
     if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
     items = conn.execute("""
-        SELECT ri.quantity, i.id as item_id, i.name, i.unit_label, i.current_stock
+        SELECT ri.quantity, i.id as item_id, i.name, i.unit_label,
+               i.current_stock, i.unit_cost, i.unit_size, i.unit_piece_label
         FROM inv_recipe_items ri JOIN inv_items i ON i.id=ri.item_id
         WHERE ri.recipe_id=%s ORDER BY i.name
     """, (recipe_id,)).fetchall()
-    d['items'] = [{'item_id':r['item_id'],'name':r['name'],'quantity':float(r['quantity']),
-                   'unit_label':r['unit_label'],'current_stock':float(r['current_stock'])} for r in items]
+    item_list = []
+    total_batch_cost = 0.0
+    for r in items:
+        qty       = float(r['quantity'])
+        unit_cost = float(r['unit_cost'])
+        line_cost = qty * unit_cost
+        total_batch_cost += line_cost
+        item_list.append({
+            'item_id':          r['item_id'],
+            'name':             r['name'],
+            'quantity':         qty,
+            'unit_label':       r['unit_label'],
+            'unit_cost':        unit_cost,
+            'unit_size':        float(r['unit_size']),
+            'unit_piece_label': r['unit_piece_label'],
+            'current_stock':    float(r['current_stock']),
+            'line_cost':        round(line_cost, 2),
+        })
+    batch_yield = int(d.get('batch_yield') or 1)
+    d['items']            = item_list
+    d['total_batch_cost'] = round(total_batch_cost, 2)
+    d['cost_per_serving'] = round(total_batch_cost / batch_yield, 2) if batch_yield > 0 else 0
     return d
 
 
@@ -1579,6 +1623,148 @@ def api_punch_summary():
             d['duration_min'] = None
         result.append(d)
     return jsonify(result)
+
+
+# ── Inventory Settlements ─────────────────────────────────────────
+
+@app.route('/api/inv/settlements', methods=['GET'])
+@login_required
+def api_inv_settlements_list():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, month, settled_by, note, settled_at FROM inv_settlements ORDER BY settled_at DESC"
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        if d.get('settled_at'): d['settled_at'] = d['settled_at'].isoformat()
+        result.append(d)
+    return jsonify(result)
+
+
+@app.route('/api/inv/settlements/<int:sid>', methods=['GET'])
+@login_required
+def api_inv_settlement_get(sid):
+    import json as _j
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM inv_settlements WHERE id=%s", (sid,)).fetchone()
+    if not row: return ('', 404)
+    d = dict(row)
+    if d.get('settled_at'): d['settled_at'] = d['settled_at'].isoformat()
+    if isinstance(d.get('snapshot'), str):
+        d['snapshot'] = _j.loads(d['snapshot'])
+    return jsonify(d)
+
+
+@app.route('/api/inv/settlements/preview', methods=['GET'])
+@login_required
+def api_inv_settlement_preview():
+    """Return current stock of all items for pre-settlement review."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, code, name, category, unit_label, unit_cost, current_stock, min_stock, vendor FROM inv_items ORDER BY code"
+        ).fetchall()
+    return jsonify([{
+        'id': r['id'], 'code': r['code'], 'name': r['name'],
+        'category': r['category'], 'unit_label': r['unit_label'],
+        'unit_cost': float(r['unit_cost']), 'current_stock': float(r['current_stock']),
+        'min_stock': float(r['min_stock']), 'vendor': r['vendor'],
+        'counted': None,  # to be filled by user
+    } for r in rows])
+
+
+@app.route('/api/inv/settlements', methods=['POST'])
+@login_required
+def api_inv_settlement_create():
+    """
+    Execute month-end settlement:
+    1. Save snapshot of before/after per item
+    2. Adjust current_stock to counted value for each item
+    3. Insert settlement record
+    """
+    import json as _j
+    b = request.get_json(force=True)
+    month      = b.get('month', '')        # e.g. "2026-03"
+    settled_by = b.get('settled_by', '')
+    note       = b.get('note', '')
+    items      = b.get('items', [])        # [{ id, counted }]
+
+    if not month:
+        return jsonify({'error': '請填入結算月份'}), 400
+    if not items:
+        return jsonify({'error': '請填入盤點數量'}), 400
+
+    snapshot = []
+    with get_db() as conn:
+        # Check duplicate
+        dup = conn.execute(
+            "SELECT id FROM inv_settlements WHERE month=%s", (month,)
+        ).fetchone()
+        if dup:
+            return jsonify({'error': f'{month} 已結算過，如需重新結算請先刪除舊記錄'}), 409
+
+        for it in items:
+            item_id = int(it['id'])
+            counted = float(it.get('counted') or 0)
+
+            # Get current system stock
+            row = conn.execute(
+                "SELECT code, name, unit_label, unit_cost, current_stock FROM inv_items WHERE id=%s",
+                (item_id,)
+            ).fetchone()
+            if not row: continue
+
+            system_stock = float(row['current_stock'])
+            variance     = counted - system_stock
+
+            snapshot.append({
+                'item_id':      item_id,
+                'code':         row['code'],
+                'name':         row['name'],
+                'unit_label':   row['unit_label'],
+                'unit_cost':    float(row['unit_cost']),
+                'system_stock': system_stock,
+                'counted':      counted,
+                'variance':     variance,
+            })
+
+            # Adjust stock to counted value
+            conn.execute(
+                "UPDATE inv_items SET current_stock=%s, updated_at=NOW() WHERE id=%s",
+                (counted, item_id)
+            )
+            # Record adjustment transaction
+            if variance != 0:
+                conn.execute("""
+                    INSERT INTO inv_transactions (item_id, txn_type, quantity, note, staff)
+                    VALUES (%s, 'adjust', %s, %s, %s)
+                """, (item_id, variance,
+                      f'{month} 月結盤點調整（系統:{system_stock} → 盤點:{counted}）',
+                      settled_by))
+
+        # Save settlement record
+        snap_json = _j.dumps(snapshot, ensure_ascii=False)
+        rec = conn.execute("""
+            INSERT INTO inv_settlements (month, settled_by, note, snapshot)
+            VALUES (%s, %s, %s, %s::jsonb) RETURNING id, month, settled_at
+        """, (month, settled_by, note, snap_json)).fetchone()
+
+    return jsonify({
+        'id':          rec['id'],
+        'month':       rec['month'],
+        'settled_at':  rec['settled_at'].isoformat(),
+        'item_count':  len(snapshot),
+        'adjusted':    sum(1 for s in snapshot if s['variance'] != 0),
+        'snapshot':    snapshot,
+    }), 201
+
+
+@app.route('/api/inv/settlements/<int:sid>', methods=['DELETE'])
+@login_required
+def api_inv_settlement_delete(sid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM inv_settlements WHERE id=%s", (sid,))
+    return jsonify({'deleted': sid})
 
 @app.route('/')
 def index():
