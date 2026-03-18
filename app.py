@@ -98,6 +98,67 @@ def init_db():
                     updated_at  TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS inv_items (
+                    id               SERIAL PRIMARY KEY,
+                    code             TEXT UNIQUE NOT NULL,
+                    name             TEXT UNIQUE NOT NULL,
+                    category         TEXT DEFAULT '',
+                    unit_label       TEXT DEFAULT '單位',
+                    unit_size        NUMERIC(10,2) DEFAULT 1,
+                    unit_piece_label TEXT DEFAULT '',
+                    unit_cost        NUMERIC(12,2) DEFAULT 0,
+                    min_stock        NUMERIC(10,2) DEFAULT 0,
+                    vendor           TEXT DEFAULT '',
+                    current_stock    NUMERIC(10,2) DEFAULT 0,
+                    created_at       TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at       TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS inv_transactions (
+                    id          SERIAL PRIMARY KEY,
+                    item_id     INT REFERENCES inv_items(id) ON DELETE CASCADE,
+                    txn_type    TEXT NOT NULL,
+                    quantity    NUMERIC(10,2) NOT NULL,
+                    note        TEXT DEFAULT '',
+                    staff       TEXT DEFAULT '',
+                    recipe_id   INT,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS inv_recipes (
+                    id          SERIAL PRIMARY KEY,
+                    name        TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    batch_yield INT DEFAULT 1,
+                    created_at  TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS inv_recipe_items (
+                    recipe_id   INT REFERENCES inv_recipes(id) ON DELETE CASCADE,
+                    item_id     INT REFERENCES inv_items(id) ON DELETE CASCADE,
+                    quantity    NUMERIC(10,2) NOT NULL DEFAULT 1,
+                    PRIMARY KEY (recipe_id, item_id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS inv_orders (
+                    id          SERIAL PRIMARY KEY,
+                    item_id     INT REFERENCES inv_items(id) ON DELETE SET NULL,
+                    item_name   TEXT NOT NULL,
+                    vendor      TEXT DEFAULT '',
+                    quantity    TEXT DEFAULT '',
+                    note        TEXT DEFAULT '',
+                    staff       TEXT DEFAULT '',
+                    status      TEXT DEFAULT 'pending',
+                    ordered_at  TIMESTAMPTZ,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
         print("[OK] Database initialised")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -894,6 +955,350 @@ def api_ocr_delete(record_id):
         conn.execute('DELETE FROM ocr_records WHERE id=%s', (record_id,))
     return jsonify({'deleted': record_id})
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Inventory API
+# ═══════════════════════════════════════════════════════════════════
+
+def inv_item_row(row):
+    if not row: return None
+    d = dict(row)
+    for f in ['unit_size','unit_cost','min_stock','current_stock']:
+        if d.get(f) is not None: d[f] = float(d[f])
+    for f in ['created_at','updated_at']:
+        if d.get(f): d[f] = d[f].isoformat()
+    return d
+
+def inv_txn_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('quantity') is not None: d['quantity'] = float(d['quantity'])
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    return d
+
+def inv_order_row(row):
+    if not row: return None
+    d = dict(row)
+    for f in ['ordered_at','created_at']:
+        if d.get(f): d[f] = d[f].isoformat()
+    return d
+
+# ── Items ──────────────────────────────────────────────────────────
+
+@app.route('/api/inv/items', methods=['GET'])
+@login_required
+def api_inv_items_list():
+    q = request.args.get('q','').strip()
+    with get_db() as conn:
+        if q:
+            rows = conn.execute(
+                "SELECT * FROM inv_items WHERE code ILIKE %s OR name ILIKE %s ORDER BY code",
+                (f'%{q}%', f'%{q}%')
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM inv_items ORDER BY code").fetchall()
+    return jsonify([inv_item_row(r) for r in rows])
+
+
+@app.route('/api/inv/items', methods=['POST'])
+@login_required
+def api_inv_items_create():
+    b = request.get_json(force=True)
+    try:
+        with get_db() as conn:
+            row = conn.execute("""
+                INSERT INTO inv_items (code,name,category,unit_label,unit_size,unit_piece_label,unit_cost,min_stock,vendor)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+            """, (b['code'],b['name'],b.get('category',''),
+                  b.get('unit_label','單位'),float(b.get('unit_size') or 1),
+                  b.get('unit_piece_label',''),float(b.get('unit_cost') or 0),
+                  float(b.get('min_stock') or 0),b.get('vendor',''))
+            ).fetchone()
+        return jsonify(inv_item_row(row)), 201
+    except psycopg.errors.UniqueViolation:
+        return jsonify({'error': '品項代碼或名稱已存在'}), 409
+
+
+@app.route('/api/inv/items/<int:item_id>', methods=['GET'])
+@login_required
+def api_inv_item_get(item_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM inv_items WHERE id=%s",(item_id,)).fetchone()
+    return jsonify(inv_item_row(row)) if row else ('',404)
+
+
+@app.route('/api/inv/items/<int:item_id>', methods=['PUT'])
+@login_required
+def api_inv_item_update(item_id):
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE inv_items SET code=%s,name=%s,category=%s,unit_label=%s,unit_size=%s,
+            unit_piece_label=%s,unit_cost=%s,min_stock=%s,vendor=%s,updated_at=NOW()
+            WHERE id=%s RETURNING *
+        """, (b['code'],b['name'],b.get('category',''),
+              b.get('unit_label','單位'),float(b.get('unit_size') or 1),
+              b.get('unit_piece_label',''),float(b.get('unit_cost') or 0),
+              float(b.get('min_stock') or 0),b.get('vendor',''),item_id)
+        ).fetchone()
+    return jsonify(inv_item_row(row)) if row else ('',404)
+
+
+@app.route('/api/inv/items/<int:item_id>', methods=['DELETE'])
+@login_required
+def api_inv_item_delete(item_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM inv_items WHERE id=%s",(item_id,))
+    return jsonify({'deleted': item_id})
+
+
+@app.route('/api/inv/items/<int:item_id>/stock', methods=['POST'])
+@login_required
+def api_inv_stock_adjust(item_id):
+    b = request.get_json(force=True)
+    txn_type = b.get('txn_type','in')   # 'in' | 'out' | 'adjust'
+    qty      = float(b.get('quantity') or 0)
+    note     = b.get('note','')
+    staff    = b.get('staff','')
+
+    delta = qty if txn_type in ('in','adjust') else -qty
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE inv_items SET current_stock=current_stock+%s, updated_at=NOW() WHERE id=%s",
+            (delta, item_id)
+        )
+        txn = conn.execute("""
+            INSERT INTO inv_transactions (item_id,txn_type,quantity,note,staff)
+            VALUES (%s,%s,%s,%s,%s) RETURNING *
+        """, (item_id, txn_type, delta, note, staff)).fetchone()
+    return jsonify(inv_txn_row(txn))
+
+# ── Transactions ───────────────────────────────────────────────────
+
+@app.route('/api/inv/transactions', methods=['GET'])
+@login_required
+def api_inv_txns():
+    item_id = request.args.get('item_id')
+    with get_db() as conn:
+        if item_id:
+            rows = conn.execute("""
+                SELECT t.*, i.name as item_name, i.unit_label
+                FROM inv_transactions t JOIN inv_items i ON i.id=t.item_id
+                WHERE t.item_id=%s ORDER BY t.created_at DESC LIMIT 100
+            """, (item_id,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT t.*, i.name as item_name, i.unit_label
+                FROM inv_transactions t JOIN inv_items i ON i.id=t.item_id
+                ORDER BY t.created_at DESC LIMIT 200
+            """).fetchall()
+    return jsonify([inv_txn_row(r) for r in rows])
+
+# ── Recipes ────────────────────────────────────────────────────────
+
+def recipe_with_items(conn, recipe_id):
+    rec = conn.execute("SELECT * FROM inv_recipes WHERE id=%s",(recipe_id,)).fetchone()
+    if not rec: return None
+    d = dict(rec)
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
+    items = conn.execute("""
+        SELECT ri.quantity, i.id as item_id, i.name, i.unit_label, i.current_stock
+        FROM inv_recipe_items ri JOIN inv_items i ON i.id=ri.item_id
+        WHERE ri.recipe_id=%s ORDER BY i.name
+    """, (recipe_id,)).fetchall()
+    d['items'] = [{'item_id':r['item_id'],'name':r['name'],'quantity':float(r['quantity']),
+                   'unit_label':r['unit_label'],'current_stock':float(r['current_stock'])} for r in items]
+    return d
+
+
+@app.route('/api/inv/recipes', methods=['GET'])
+@login_required
+def api_inv_recipes_list():
+    with get_db() as conn:
+        rows = conn.execute("SELECT id FROM inv_recipes ORDER BY name").fetchall()
+        return jsonify([recipe_with_items(conn, r['id']) for r in rows])
+
+
+@app.route('/api/inv/recipes', methods=['POST'])
+@login_required
+def api_inv_recipes_create():
+    import json as _j
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        rec = conn.execute("""
+            INSERT INTO inv_recipes (name,description,batch_yield) VALUES (%s,%s,%s) RETURNING id
+        """, (b['name'],b.get('description',''),int(b.get('batch_yield') or 1))).fetchone()
+        rid = rec['id']
+        for it in b.get('items',[]):
+            conn.execute("INSERT INTO inv_recipe_items (recipe_id,item_id,quantity) VALUES (%s,%s,%s)",
+                         (rid, it['item_id'], float(it['quantity'])))
+        return jsonify(recipe_with_items(conn, rid)), 201
+
+
+@app.route('/api/inv/recipes/<int:recipe_id>', methods=['PUT'])
+@login_required
+def api_inv_recipe_update(recipe_id):
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE inv_recipes SET name=%s,description=%s,batch_yield=%s,updated_at=NOW()
+            WHERE id=%s
+        """, (b['name'],b.get('description',''),int(b.get('batch_yield') or 1),recipe_id))
+        conn.execute("DELETE FROM inv_recipe_items WHERE recipe_id=%s",(recipe_id,))
+        for it in b.get('items',[]):
+            conn.execute("INSERT INTO inv_recipe_items (recipe_id,item_id,quantity) VALUES (%s,%s,%s)",
+                         (recipe_id, it['item_id'], float(it['quantity'])))
+        return jsonify(recipe_with_items(conn, recipe_id))
+
+
+@app.route('/api/inv/recipes/<int:recipe_id>', methods=['DELETE'])
+@login_required
+def api_inv_recipe_delete(recipe_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM inv_recipes WHERE id=%s",(recipe_id,))
+    return jsonify({'deleted': recipe_id})
+
+
+@app.route('/api/inv/recipes/<int:recipe_id>/produce', methods=['POST'])
+@login_required
+def api_inv_recipe_produce(recipe_id):
+    b      = request.get_json(force=True)
+    batches= float(b.get('batches') or 1)
+    staff  = b.get('staff','')
+    with get_db() as conn:
+        items = conn.execute("""
+            SELECT ri.quantity, i.id as item_id, i.name, i.current_stock, i.unit_label
+            FROM inv_recipe_items ri JOIN inv_items i ON i.id=ri.item_id
+            WHERE ri.recipe_id=%s
+        """, (recipe_id,)).fetchall()
+        # Check stock
+        shortages = []
+        for it in items:
+            needed = float(it['quantity']) * batches
+            if float(it['current_stock']) < needed:
+                shortages.append({'name':it['name'],'needed':needed,'available':float(it['current_stock'])})
+        if shortages:
+            return jsonify({'error':'庫存不足','shortages':shortages}), 422
+        # Deduct
+        for it in items:
+            needed = float(it['quantity']) * batches
+            conn.execute("UPDATE inv_items SET current_stock=current_stock-%s,updated_at=NOW() WHERE id=%s",
+                         (needed, it['item_id']))
+            conn.execute("INSERT INTO inv_transactions (item_id,txn_type,quantity,note,staff,recipe_id) VALUES (%s,'produce',%s,%s,%s,%s)",
+                         (it['item_id'], -needed, f'生產 {batches} 批', staff, recipe_id))
+        rec = conn.execute("SELECT name,batch_yield FROM inv_recipes WHERE id=%s",(recipe_id,)).fetchone()
+        return jsonify({'ok': True, 'batches': batches,
+                       'servings': batches * rec['batch_yield'],
+                       'recipe': rec['name']})
+
+# ── Orders ─────────────────────────────────────────────────────────
+
+@app.route('/api/inv/orders', methods=['GET'])
+@login_required
+def api_inv_orders_list():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM inv_orders ORDER BY created_at DESC").fetchall()
+    return jsonify([inv_order_row(r) for r in rows])
+
+
+@app.route('/api/inv/orders', methods=['POST'])
+@login_required
+def api_inv_orders_create():
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            INSERT INTO inv_orders (item_id,item_name,vendor,quantity,note,staff)
+            VALUES (%s,%s,%s,%s,%s,%s) RETURNING *
+        """, (b.get('item_id'), b['item_name'], b.get('vendor',''),
+              b.get('quantity',''), b.get('note',''), b.get('staff',''))
+        ).fetchone()
+    return jsonify(inv_order_row(row)), 201
+
+
+@app.route('/api/inv/orders/<int:order_id>', methods=['PUT'])
+@login_required
+def api_inv_order_update(order_id):
+    b = request.get_json(force=True)
+    # Mark as ordered
+    if b.get('status') == 'ordered':
+        with get_db() as conn:
+            row = conn.execute("""
+                UPDATE inv_orders SET status='ordered', staff=%s, note=%s, ordered_at=NOW()
+                WHERE id=%s RETURNING *
+            """, (b.get('staff',''), b.get('note',''), order_id)).fetchone()
+    else:
+        with get_db() as conn:
+            row = conn.execute("""
+                UPDATE inv_orders SET item_name=%s,vendor=%s,quantity=%s,note=%s,staff=%s
+                WHERE id=%s RETURNING *
+            """, (b['item_name'],b.get('vendor',''),b.get('quantity',''),
+                  b.get('note',''),b.get('staff',''),order_id)).fetchone()
+    return jsonify(inv_order_row(row)) if row else ('',404)
+
+
+@app.route('/api/inv/orders/<int:order_id>', methods=['DELETE'])
+@login_required
+def api_inv_order_delete(order_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM inv_orders WHERE id=%s",(order_id,))
+    return jsonify({'deleted': order_id})
+
+# ── Low stock ──────────────────────────────────────────────────────
+
+@app.route('/api/inv/low-stock', methods=['GET'])
+@login_required
+def api_inv_low_stock():
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM inv_items
+            WHERE min_stock > 0 AND current_stock <= min_stock
+            ORDER BY (current_stock - min_stock)
+        """).fetchall()
+    return jsonify([inv_item_row(r) for r in rows])
+
+# ── Profit report ──────────────────────────────────────────────────
+
+@app.route('/api/inv/profit', methods=['GET'])
+@login_required
+def api_inv_profit():
+    with get_db() as conn:
+        # Total spent on purchasing (in transactions with positive qty)
+        spent = conn.execute("""
+            SELECT COALESCE(SUM(t.quantity * i.unit_cost), 0) as total_cost
+            FROM inv_transactions t JOIN inv_items i ON i.id=t.item_id
+            WHERE t.txn_type='in'
+        """).fetchone()
+        # Current inventory value
+        inv_value = conn.execute("""
+            SELECT COALESCE(SUM(current_stock * unit_cost), 0) as total_value
+            FROM inv_items
+        """).fetchone()
+        # Per item summary
+        items = conn.execute("""
+            SELECT i.code, i.name, i.category, i.unit_cost, i.current_stock,
+                   i.unit_label,
+                   COALESCE(SUM(CASE WHEN t.txn_type='in' THEN t.quantity ELSE 0 END),0) as total_in,
+                   COALESCE(SUM(CASE WHEN t.txn_type IN ('out','produce') THEN ABS(t.quantity) ELSE 0 END),0) as total_out
+            FROM inv_items i
+            LEFT JOIN inv_transactions t ON t.item_id=i.id
+            GROUP BY i.id ORDER BY i.code
+        """).fetchall()
+
+    result = {
+        'total_purchase_cost': float(spent['total_cost']),
+        'current_inventory_value': float(inv_value['total_value']),
+        'items': [{
+            'code': r['code'], 'name': r['name'], 'category': r['category'],
+            'unit_cost': float(r['unit_cost']), 'current_stock': float(r['current_stock']),
+            'unit_label': r['unit_label'],
+            'total_in': float(r['total_in']), 'total_out': float(r['total_out']),
+            'cost_in': float(r['total_in']) * float(r['unit_cost']),
+            'cost_out': float(r['total_out']) * float(r['unit_cost']),
+        } for r in items]
+    }
+    return jsonify(result)
 
 @app.route('/')
 def index():
