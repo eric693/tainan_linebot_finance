@@ -8,368 +8,314 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --navy: #0f1c3a; --navy-mid: #1a2d58; --accent: #4a7bda;
-  --green: #2e9e6b; --green-light: #edfaf4; --red: #d64242; --red-light: #fdf0f0;
-  --gold: #c8a96e; --gold-light: #fdf6e8;
+  --navy: #0f1c3a; --accent: #4a7bda;
+  --green: #2e9e6b; --green-light: #edfaf4;
+  --red: #d64242;   --red-light: #fdf0f0;
+  --gold: #c8a96e;
   --orange: #e07b2a; --orange-light: #fef3e8;
   --bg: #f0f2f8; --surface: #fff; --text: #1e2a45; --muted: #8892a4; --border: #dde3ef;
 }
-html, body { height: 100%; background: var(--navy); font-family: 'Noto Sans TC', sans-serif; }
-
-/* ── Layout ── */
-.wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 24px 16px 40px; }
-
-/* ── Header ── */
-.header { width: 100%; max-width: 420px; text-align: center; margin-bottom: 28px; }
-.header-brand { font-size: 12px; letter-spacing: .18em; color: rgba(255,255,255,.35); text-transform: uppercase; margin-bottom: 8px; }
-.header-bar { width: 32px; height: 2px; background: var(--gold); margin: 0 auto 20px; }
-.clock-display { font-family: 'DM Mono', monospace; font-size: 52px; font-weight: 500; color: #fff; letter-spacing: .04em; line-height: 1; }
-.clock-date { font-size: 14px; color: rgba(255,255,255,.5); margin-top: 8px; letter-spacing: .06em; }
-
-/* ── Card ── */
-.card { background: var(--surface); border-radius: 18px; width: 100%; max-width: 420px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
-
-/* ── Step: select staff ── */
-.step { padding: 28px 24px; }
-.step-label { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .12em; text-transform: uppercase; margin-bottom: 14px; }
-.staff-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
-.staff-btn {
-  padding: 14px 8px; border-radius: 10px; border: 2px solid var(--border);
-  background: var(--bg); font-family: 'Noto Sans TC', sans-serif; font-size: 13px;
-  font-weight: 600; color: var(--text); cursor: pointer; transition: all .15s; text-align: center;
-}
-.staff-btn:hover  { border-color: var(--accent); color: var(--accent); background: #eef3fd; }
-.staff-btn.active { border-color: var(--navy); background: var(--navy); color: #fff; }
-.staff-role { font-size: 10px; font-weight: 400; color: var(--muted); margin-top: 3px; }
-.staff-btn.active .staff-role { color: rgba(255,255,255,.55); }
-
-/* ── PIN ── */
-.pin-wrap { margin-bottom: 20px; }
-.pin-dots { display: flex; gap: 10px; justify-content: center; margin: 12px 0 16px; }
-.pin-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); background: transparent; transition: background .1s; }
-.pin-dot.filled { background: var(--navy); border-color: var(--navy); }
-.pin-keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.pin-key {
-  padding: 16px; border-radius: 10px; border: 1.5px solid var(--border);
-  background: var(--bg); font-size: 18px; font-family: 'DM Mono', monospace;
-  font-weight: 500; color: var(--text); cursor: pointer; transition: all .1s; text-align: center;
-}
-.pin-key:active { background: var(--navy); color: #fff; border-color: var(--navy); transform: scale(.96); }
-.pin-key.del { font-size: 14px; }
-.pin-key.empty { visibility: hidden; }
-.pin-error { font-size: 12px; color: var(--red); text-align: center; margin-top: 8px; min-height: 18px; }
-
-/* ── Punch buttons ── */
-.punch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
-.punch-btn {
-  padding: 20px 12px; border-radius: 12px; border: none; font-family: 'Noto Sans TC', sans-serif;
-  font-size: 16px; font-weight: 700; cursor: pointer; transition: all .15s; letter-spacing: .04em;
-}
-.punch-btn-in    { background: var(--green);  color: #fff; }
-.punch-btn-out   { background: var(--red);    color: #fff; }
-.punch-btn-bout  { background: var(--orange); color: #fff; }
-.punch-btn-bin   { background: var(--accent); color: #fff; }
-.punch-btn:hover { opacity: .88; transform: translateY(-1px); }
-.punch-btn:active { transform: scale(.97); }
-.punch-btn-sub   { font-size: 11px; font-weight: 400; opacity: .75; margin-top: 4px; }
-
-/* ── Today log ── */
-.log-section { border-top: 1px solid var(--border); padding: 20px 24px; }
-.log-title { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 12px; }
-.log-empty { font-size: 13px; color: var(--muted); text-align: center; padding: 8px 0; }
-.log-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f2f8; }
+html, body { height: 100%; background: var(--navy); font-family: "Noto Sans TC", sans-serif; -webkit-tap-highlight-color: transparent; }
+.wrap { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 24px 16px 48px; }
+.header { width: 100%; max-width: 420px; text-align: center; margin-bottom: 24px; }
+.header-brand { font-size: 11px; letter-spacing: .2em; color: rgba(255,255,255,.3); text-transform: uppercase; margin-bottom: 6px; }
+.header-bar { width: 28px; height: 2px; background: var(--gold); margin: 0 auto 18px; }
+.clock-time { font-family: "DM Mono", monospace; font-size: 48px; font-weight: 500; color: #fff; letter-spacing: .04em; }
+.clock-date { font-size: 13px; color: rgba(255,255,255,.45); margin-top: 6px; }
+.card { background: var(--surface); border-radius: 18px; width: 100%; max-width: 420px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+.card-body { padding: 28px 24px; }
+.gps-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; margin-bottom: 18px; }
+.gps-ok      { background: var(--green-light); color: var(--green); }
+.gps-warn    { background: var(--orange-light); color: var(--orange); }
+.gps-err     { background: var(--red-light);   color: var(--red); }
+.gps-loading { background: #eef3fd; color: var(--accent); }
+.gps-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot-ok   { background: var(--green); }
+.dot-warn { background: var(--orange); animation: pulse .8s infinite; }
+.dot-err  { background: var(--red); }
+.dot-spin { background: var(--accent); animation: pulse .8s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+.field-label { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 6px; }
+.field-input { width: 100%; padding: 12px 14px; border: 1.5px solid var(--border); border-radius: 10px; font-family: "Noto Sans TC", sans-serif; font-size: 15px; color: var(--text); outline: none; transition: border-color .15s; margin-bottom: 14px; background: #fff; }
+.field-input:focus { border-color: var(--accent); }
+.login-btn { width: 100%; padding: 14px; border-radius: 10px; border: none; background: var(--navy); color: #fff; font-family: "Noto Sans TC", sans-serif; font-size: 15px; font-weight: 700; cursor: pointer; }
+.login-btn:active { opacity: .85; }
+.login-err { color: var(--red); font-size: 13px; text-align: center; margin-top: 10px; min-height: 18px; }
+.greeting { font-size: 15px; font-weight: 700; color: var(--navy); margin-bottom: 18px; }
+.punch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.punch-btn { padding: 22px 10px; border-radius: 12px; border: none; font-family: "Noto Sans TC", sans-serif; font-size: 15px; font-weight: 700; cursor: pointer; text-align: center; transition: all .12s; }
+.punch-btn:active:not(:disabled) { transform: scale(.96); }
+.punch-btn:disabled { opacity: .35; cursor: not-allowed; }
+.p-sub { font-size: 11px; font-weight: 400; opacity: .75; margin-top: 4px; }
+.p-in   { background: var(--green);  color: #fff; }
+.p-out  { background: var(--red);    color: #fff; }
+.p-bout { background: var(--orange); color: #fff; }
+.p-bin  { background: var(--accent); color: #fff; }
+.log-section { border-top: 1px solid var(--border); padding: 16px 24px; }
+.log-title { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 10px; }
+.log-item { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #f0f2f8; }
 .log-item:last-child { border-bottom: none; }
-.log-type { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 20px; }
-.log-type-in   { background: var(--green-light); color: var(--green); }
-.log-type-out  { background: var(--red-light);   color: var(--red);   }
-.log-type-bout { background: var(--orange-light); color: var(--orange); }
-.log-type-bin  { background: #eef3fd; color: var(--accent); }
-.log-time { font-family: 'DM Mono', monospace; font-size: 15px; color: var(--text); font-weight: 500; }
-.log-manual { font-size: 10px; color: var(--muted); margin-top: 2px; }
-
-/* ── Success flash ── */
-.success-flash {
-  position: fixed; inset: 0; background: rgba(46,158,107,.92);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  z-index: 999; opacity: 0; pointer-events: none; transition: opacity .2s;
-}
-.success-flash.show { opacity: 1; pointer-events: all; }
-.success-flash-name { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 8px; }
-.success-flash-type { font-size: 16px; color: rgba(255,255,255,.8); margin-bottom: 20px; }
-.success-flash-time { font-family: 'DM Mono', monospace; font-size: 38px; color: #fff; font-weight: 500; }
-
-/* ── Error flash ── */
-.error-flash {
-  position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-  background: var(--red); color: #fff; padding: 12px 24px; border-radius: 10px;
-  font-size: 14px; font-weight: 600; z-index: 999;
-  opacity: 0; pointer-events: none; transition: opacity .2s; white-space: nowrap;
-}
-.error-flash.show { opacity: 1; }
-
-/* ── Back button ── */
-.back-btn { background: transparent; border: none; color: rgba(255,255,255,.4); font-size: 13px; cursor: pointer; margin-top: 16px; letter-spacing: .05em; transition: color .15s; }
-.back-btn:hover { color: rgba(255,255,255,.8); }
+.lb { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; }
+.lb-in   { background: var(--green-light); color: var(--green); }
+.lb-out  { background: var(--red-light);   color: var(--red); }
+.lb-bout { background: var(--orange-light); color: var(--orange); }
+.lb-bin  { background: #eef3fd; color: var(--accent); }
+.log-time { font-family: "DM Mono", monospace; font-size: 14px; font-weight: 500; text-align: right; }
+.log-sub  { font-size: 10px; color: var(--muted); text-align: right; margin-top: 1px; }
+.log-empty { font-size: 13px; color: var(--muted); text-align: center; padding: 8px 0; }
+.logout-row { padding: 12px 24px; border-top: 1px solid var(--border); text-align: right; }
+.logout-btn { background: transparent; border: none; font-size: 12px; color: var(--muted); cursor: pointer; font-family: "Noto Sans TC", sans-serif; }
+.logout-btn:hover { color: var(--red); }
+.success-overlay { position: fixed; inset: 0; background: rgba(46,158,107,.93); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 999; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.success-overlay.show { opacity: 1; pointer-events: all; }
+.so-name { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+.so-type { font-size: 16px; color: rgba(255,255,255,.8); margin-bottom: 6px; }
+.so-time { font-family: "DM Mono", monospace; font-size: 44px; color: #fff; font-weight: 500; }
+.so-dist { font-size: 13px; color: rgba(255,255,255,.6); margin-top: 8px; }
+.toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--red); color: #fff; padding: 12px 22px; border-radius: 10px; font-size: 14px; font-weight: 600; z-index: 999; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: 88vw; text-align: center; white-space: pre-line; }
+.toast.show { opacity: 1; }
 </style>
 </head>
 <body>
 <div class="wrap">
-
-  <!-- Header with clock -->
   <div class="header">
     <div class="header-brand">財務管理系統</div>
     <div class="header-bar"></div>
-    <div class="clock-display" id="clock-time">--:--:--</div>
-    <div class="clock-date"    id="clock-date">載入中...</div>
+    <div class="clock-time" id="clock-time">--:--:--</div>
+    <div class="clock-date"  id="clock-date"></div>
   </div>
 
-  <!-- Main card -->
   <div class="card">
-
-    <!-- Step 1: select staff -->
-    <div class="step" id="step-staff">
-      <div class="step-label">選擇員工</div>
-      <div class="staff-grid" id="staff-grid">
-        <div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px;font-size:13px">載入中...</div>
-      </div>
-      <div style="font-size:12px;color:var(--muted);text-align:center;margin-top:4px">點擊您的名字繼續</div>
+    <!-- Login -->
+    <div class="card-body" id="screen-login">
+      <div style="font-size:16px;font-weight:700;color:var(--navy);margin-bottom:20px">員工登入</div>
+      <div class="field-label">帳號</div>
+      <input class="field-input" type="text" id="inp-user" placeholder="請輸入帳號"
+        autocomplete="username" autocapitalize="none" spellcheck="false">
+      <div class="field-label">密碼</div>
+      <input class="field-input" type="password" id="inp-pass" placeholder="請輸入密碼"
+        autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+      <button class="login-btn" onclick="doLogin()" id="login-btn">登入</button>
+      <div class="login-err" id="login-err"></div>
     </div>
 
-    <!-- Step 2: PIN (shown only if staff has PIN) -->
-    <div class="step" id="step-pin" style="display:none">
-      <div class="step-label" id="pin-label">請輸入 PIN</div>
-      <div class="pin-wrap">
-        <div class="pin-dots" id="pin-dots">
-          <div class="pin-dot" id="pd0"></div>
-          <div class="pin-dot" id="pd1"></div>
-          <div class="pin-dot" id="pd2"></div>
-          <div class="pin-dot" id="pd3"></div>
+    <!-- Punch -->
+    <div id="screen-punch" style="display:none">
+      <div class="card-body" style="padding-bottom:16px">
+        <div class="greeting" id="greeting"></div>
+        <div class="gps-bar gps-loading" id="gps-bar">
+          <div class="gps-dot dot-spin" id="gps-dot"></div>
+          <span id="gps-text">正在取得定位...</span>
         </div>
-        <div class="pin-keypad">
-          <button class="pin-key" onclick="pinPress('1')">1</button>
-          <button class="pin-key" onclick="pinPress('2')">2</button>
-          <button class="pin-key" onclick="pinPress('3')">3</button>
-          <button class="pin-key" onclick="pinPress('4')">4</button>
-          <button class="pin-key" onclick="pinPress('5')">5</button>
-          <button class="pin-key" onclick="pinPress('6')">6</button>
-          <button class="pin-key" onclick="pinPress('7')">7</button>
-          <button class="pin-key" onclick="pinPress('8')">8</button>
-          <button class="pin-key" onclick="pinPress('9')">9</button>
-          <button class="pin-key empty"></button>
-          <button class="pin-key" onclick="pinPress('0')">0</button>
-          <button class="pin-key del" onclick="pinDel()">刪除</button>
+        <div class="punch-grid">
+          <button class="punch-btn p-in"   id="btn-in"   onclick="doPunch('in')">
+            上班打卡<div class="p-sub">Clock In</div>
+          </button>
+          <button class="punch-btn p-out"  id="btn-out"  onclick="doPunch('out')">
+            下班打卡<div class="p-sub">Clock Out</div>
+          </button>
+          <button class="punch-btn p-bout" id="btn-bout" onclick="doPunch('break_out')">
+            休息開始<div class="p-sub">Break Out</div>
+          </button>
+          <button class="punch-btn p-bin"  id="btn-bin"  onclick="doPunch('break_in')">
+            休息結束<div class="p-sub">Break In</div>
+          </button>
         </div>
-        <div class="pin-error" id="pin-error"></div>
+      </div>
+      <div class="log-section">
+        <div class="log-title">今日打卡記錄</div>
+        <div id="today-log"><div class="log-empty">尚無記錄</div></div>
+      </div>
+      <div class="logout-row">
+        <button class="logout-btn" onclick="doLogout()">登出</button>
       </div>
     </div>
-
-    <!-- Step 3: punch actions -->
-    <div class="step" id="step-punch" style="display:none">
-      <div class="step-label" id="punch-greeting">早安</div>
-      <div class="punch-grid">
-        <button class="punch-btn punch-btn-in"   onclick="doPunch('in')">
-          上班打卡<div class="punch-btn-sub">Clock In</div>
-        </button>
-        <button class="punch-btn punch-btn-out"  onclick="doPunch('out')">
-          下班打卡<div class="punch-btn-sub">Clock Out</div>
-        </button>
-        <button class="punch-btn punch-btn-bout" onclick="doPunch('break_out')">
-          休息開始<div class="punch-btn-sub">Break Out</div>
-        </button>
-        <button class="punch-btn punch-btn-bin"  onclick="doPunch('break_in')">
-          休息結束<div class="punch-btn-sub">Break In</div>
-        </button>
-      </div>
-    </div>
-
-    <!-- Today's log (shown in step-punch) -->
-    <div class="log-section" id="today-log" style="display:none">
-      <div class="log-title">今日打卡記錄</div>
-      <div id="today-log-list"><div class="log-empty">尚無記錄</div></div>
-    </div>
-
-  </div><!-- end card -->
-
-  <button class="back-btn" id="back-btn" style="display:none" onclick="goBack()">返回選擇員工</button>
-
-</div><!-- end wrap -->
-
-<!-- Success flash -->
-<div class="success-flash" id="success-flash">
-  <div class="success-flash-name" id="sf-name"></div>
-  <div class="success-flash-type" id="sf-type"></div>
-  <div class="success-flash-time" id="sf-time"></div>
+  </div>
 </div>
 
-<!-- Error flash -->
-<div class="error-flash" id="error-flash"></div>
+<div class="success-overlay" id="sov">
+  <div class="so-name" id="so-name"></div>
+  <div class="so-type" id="so-type"></div>
+  <div class="so-time" id="so-time"></div>
+  <div class="so-dist" id="so-dist"></div>
+</div>
+<div class="toast" id="toast"></div>
 
 <script>
-// ── Clock ──────────────────────────────────────────────────────
-function updateClock() {
-  const now = new Date();
-  document.getElementById('clock-time').textContent =
-    [now.getHours(), now.getMinutes(), now.getSeconds()]
-      .map(n => String(n).padStart(2,'0')).join(':');
-  const days = ['日','一','二','三','四','五','六'];
-  document.getElementById('clock-date').textContent =
-    `${now.getFullYear()} / ${now.getMonth()+1} / ${now.getDate()}（週${days[now.getDay()]}）`;
+const DAYS  = ["日","一","二","三","四","五","六"];
+const LABEL = { in:"上班打卡", out:"下班打卡", break_out:"休息開始", break_in:"休息結束" };
+const LCLS  = { in:"lb-in", out:"lb-out", break_out:"lb-bout", break_in:"lb-bin" };
+
+// Clock
+function tick() {
+  const n = new Date();
+  document.getElementById("clock-time").textContent =
+    [n.getHours(),n.getMinutes(),n.getSeconds()].map(x=>String(x).padStart(2,"0")).join(":");
+  document.getElementById("clock-date").textContent =
+    n.getFullYear()+" / "+(n.getMonth()+1)+" / "+n.getDate()+"（週"+DAYS[n.getDay()]+"）";
 }
-setInterval(updateClock, 1000);
-updateClock();
+setInterval(tick,1000); tick();
 
-// ── State ──────────────────────────────────────────────────────
-let selectedStaff = null;  // { id, name, role, hasPin }
-let pinBuffer = '';
-const PIN_LEN = 4;
+// State
+let me=null, settings=null, gpsPos=null, watchId=null, locked=false;
 
-// ── Load staff ─────────────────────────────────────────────────
-async function loadStaff() {
-  const res  = await fetch('/api/punch/staff-public');
-  const list = await res.json();
-  const grid = document.getElementById('staff-grid');
-  if (!list.length) {
-    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--muted);padding:20px;font-size:13px">尚未設定員工<br>請聯絡管理員</div>';
-    return;
-  }
-  grid.innerHTML = list.map(s => `
-    <button class="staff-btn" onclick="selectStaff(${s.id},'${escJ(s.name)}','${escJ(s.role||'')}')">
-      ${escH(s.name)}
-      ${s.role ? `<div class="staff-role">${escH(s.role)}</div>` : ''}
-    </button>`).join('');
+// Init
+(async()=>{
+  settings = await apiFetch("/api/punch/settings");
+  const r  = await fetch("/api/punch/me");
+  if(r.ok){ me=await r.json(); showPunch(); }
+  else showLogin();
+})();
+
+// Login
+function showLogin(){
+  document.getElementById("screen-login").style.display="";
+  document.getElementById("screen-punch").style.display="none";
 }
-loadStaff();
-
-// ── Select staff ───────────────────────────────────────────────
-async function selectStaff(id, name, role) {
-  // highlight
-  document.querySelectorAll('.staff-btn').forEach(b => b.classList.remove('active'));
-  event.currentTarget.classList.add('active');
-
-  selectedStaff = { id, name, role };
-  pinBuffer = '';
-
-  // Check if this staff has PIN (we ask server indirectly by trying with empty PIN)
-  // Actually we'll show PIN step always if the staff page requires it.
-  // The server will tell us — but to avoid extra round-trip, just show punch directly.
-  // PIN will be validated on submit.
-  showStep('punch');
+async function doLogin(){
+  const u=document.getElementById("inp-user").value.trim();
+  const p=document.getElementById("inp-pass").value;
+  const errEl=document.getElementById("login-err");
+  const btn=document.getElementById("login-btn");
+  errEl.textContent="";
+  if(!u||!p){errEl.textContent="請輸入帳號及密碼";return;}
+  btn.disabled=true; btn.textContent="登入中...";
+  try{
+    const r=await fetch("/api/punch/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json();
+    if(!r.ok){errEl.textContent=d.error||"登入失敗";return;}
+    me=d;
+    document.getElementById("inp-pass").value="";
+    showPunch();
+  }catch(e){errEl.textContent="網路錯誤，請重試";}
+  finally{btn.disabled=false;btn.textContent="登入";}
 }
 
-function goBack() {
-  selectedStaff = null;
-  pinBuffer = '';
-  document.querySelectorAll('.staff-btn').forEach(b => b.classList.remove('active'));
-  showStep('staff');
+// Punch screen
+function showPunch(){
+  document.getElementById("screen-login").style.display="none";
+  document.getElementById("screen-punch").style.display="";
+  const h=new Date().getHours();
+  const g=h<10?"早安":h<14?"午安":h<18?"下午好":"晚安";
+  document.getElementById("greeting").textContent=g+"，"+me.name;
+  loadLog();
+  startGPS();
+}
+async function doLogout(){
+  await fetch("/api/punch/logout",{method:"POST"});
+  me=null; gpsPos=null;
+  if(watchId) navigator.geolocation.clearWatch(watchId);
+  showLogin();
 }
 
-function showStep(step) {
-  ['staff','pin','punch'].forEach(s => {
-    document.getElementById('step-' + s).style.display = s === step ? '' : 'none';
-  });
-  document.getElementById('today-log').style.display = step === 'punch' ? '' : 'none';
-  document.getElementById('back-btn').style.display = step !== 'staff' ? '' : 'none';
-
-  if (step === 'punch' && selectedStaff) {
-    const h = new Date().getHours();
-    const greet = h < 10 ? '早安' : h < 14 ? '午安' : h < 18 ? '下午好' : '晚安';
-    document.getElementById('punch-greeting').textContent = `${greet}，${selectedStaff.name}`;
-    loadTodayLog();
-  }
+// GPS
+function startGPS(){
+  gpsBar("loading","正在取得定位...");
+  if(!navigator.geolocation){ gpsBar("err","裝置不支援 GPS"); return; }
+  navigator.geolocation.getCurrentPosition(gpsOk,gpsErr,{timeout:12000,enableHighAccuracy:true});
+  watchId=navigator.geolocation.watchPosition(gpsOk,gpsErr,{enableHighAccuracy:true,maximumAge:15000,timeout:15000});
 }
-
-// ── PIN ────────────────────────────────────────────────────────
-function pinPress(d) {
-  if (pinBuffer.length >= PIN_LEN) return;
-  pinBuffer += d;
-  updatePinDots();
-  if (pinBuffer.length === PIN_LEN) showStep('punch');
-}
-function pinDel() {
-  pinBuffer = pinBuffer.slice(0,-1);
-  updatePinDots();
-  document.getElementById('pin-error').textContent = '';
-}
-function updatePinDots() {
-  for (let i=0; i<PIN_LEN; i++) {
-    document.getElementById('pd'+i).classList.toggle('filled', i < pinBuffer.length);
-  }
-}
-
-// ── Punch ──────────────────────────────────────────────────────
-const typeLabel = { in:'上班打卡', out:'下班打卡', break_out:'休息開始', break_in:'休息結束' };
-const typeClass = { in:'log-type-in', out:'log-type-out', break_out:'log-type-bout', break_in:'log-type-bin' };
-
-async function doPunch(type) {
-  if (!selectedStaff) return;
-  try {
-    const res = await fetch('/api/punch/clock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ staff_id: selectedStaff.id, punch_type: type, pin: pinBuffer })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      if (res.status === 403) {
-        pinBuffer = '';
-        updatePinDots();
-        document.getElementById('pin-error').textContent = 'PIN 錯誤，請重試';
-        showStep('pin');
-        document.getElementById('punch-greeting').textContent = `請輸入 PIN — ${selectedStaff.name}`;
-      } else {
-        showError(data.error || '打卡失敗');
-      }
-      return;
+function gpsOk(pos){
+  gpsPos={lat:pos.coords.latitude,lng:pos.coords.longitude};
+  const req = settings && settings.gps_required;
+  const hasBase = settings && settings.lat;
+  if(hasBase){
+    const dist=hav(gpsPos.lat,gpsPos.lng,settings.lat,settings.lng);
+    const r=settings.radius_m||100;
+    if(dist<=r){
+      gpsBar("ok","距離打卡地點 "+dist+" 公尺（範圍 "+r+"m）");
+      setBtns(false);
+    } else {
+      gpsBar("warn","距離 "+dist+" 公尺，超出範圍 "+r+"m");
+      setBtns(req,"超出打卡範圍");
     }
-    // Success
-    const now = new Date();
-    const timeStr = [now.getHours(), now.getMinutes()]
-      .map(n=>String(n).padStart(2,'0')).join(':');
-    showSuccess(selectedStaff.name, typeLabel[type], timeStr);
-    await loadTodayLog();
-  } catch(e) {
-    showError('網路錯誤，請重試');
+  } else {
+    gpsBar("ok","定位成功");
+    setBtns(false);
   }
 }
-
-// ── Today log ──────────────────────────────────────────────────
-async function loadTodayLog() {
-  if (!selectedStaff) return;
-  const res  = await fetch(`/api/punch/today?staff_id=${selectedStaff.id}`);
-  const list = await res.json();
-  const wrap = document.getElementById('today-log-list');
-  if (!list.length) { wrap.innerHTML = '<div class="log-empty">尚無打卡記錄</div>'; return; }
-  wrap.innerHTML = list.map(r => {
-    const t = r.punched_at ? r.punched_at.slice(11,16) : '';
-    return `<div class="log-item">
-      <span class="log-type ${typeClass[r.punch_type]||''}">${typeLabel[r.punch_type]||r.punch_type}</span>
-      <div style="text-align:right">
-        <div class="log-time">${t}</div>
-        ${r.is_manual ? '<div class="log-manual">補打卡</div>' : ''}
-      </div>
-    </div>`;
-  }).join('');
+function gpsErr(e){
+  if(settings&&settings.gps_required){
+    gpsBar("err","無法取得定位，請允許位置權限");
+    setBtns(true,"需要定位權限");
+  } else {
+    gpsBar("warn","未取得定位（非必要）");
+    setBtns(false);
+  }
+}
+function gpsBar(type,msg){
+  const typeMap={ok:"gps-ok",warn:"gps-warn",err:"gps-err",loading:"gps-loading"};
+  const dotMap ={ok:"dot-ok",warn:"dot-warn",err:"dot-err",loading:"dot-spin"};
+  document.getElementById("gps-bar").className="gps-bar "+(typeMap[type]||"gps-loading");
+  document.getElementById("gps-dot").className="gps-dot "+(dotMap[type]||"dot-spin");
+  document.getElementById("gps-text").textContent=msg;
+}
+function setBtns(disabled,title=""){
+  ["btn-in","btn-out","btn-bout","btn-bin"].forEach(id=>{
+    const b=document.getElementById(id);
+    b.disabled=disabled;
+    if(disabled&&title) b.title=title;
+  });
+}
+function hav(a,b,c,d){
+  const R=6371000,p=Math.PI/180;
+  const x=Math.sin((c-a)*p/2)**2+Math.cos(a*p)*Math.cos(c*p)*Math.sin((d-b)*p/2)**2;
+  return Math.round(2*R*Math.asin(Math.sqrt(x)));
 }
 
-// ── Flash messages ─────────────────────────────────────────────
-function showSuccess(name, type, time) {
-  const el = document.getElementById('success-flash');
-  document.getElementById('sf-name').textContent = name;
-  document.getElementById('sf-type').textContent = type + ' 成功';
-  document.getElementById('sf-time').textContent = time;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2200);
-}
-function showError(msg) {
-  const el = document.getElementById('error-flash');
-  el.textContent = msg;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2500);
+// Punch
+async function doPunch(type){
+  if(locked)return;
+  locked=true; setTimeout(()=>locked=false,2000);
+  const body={punch_type:type};
+  if(gpsPos){body.lat=gpsPos.lat;body.lng=gpsPos.lng;}
+  try{
+    const r=await fetch("/api/punch/clock",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok){showToast(d.error||"打卡失敗");locked=false;return;}
+    const n=new Date();
+    const ts=[n.getHours(),n.getMinutes()].map(x=>String(x).padStart(2,"0")).join(":");
+    const dist=d.gps_distance!=null?"距離打卡地點 "+d.gps_distance+" 公尺":"";
+    showSuccess(me.name,LABEL[type],ts,dist);
+    await loadLog();
+  }catch(e){showToast("網路錯誤，請重試");locked=false;}
 }
 
-// ── Helpers ────────────────────────────────────────────────────
-function escH(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function escJ(s) { return String(s).replace(/'/g,"\\'"); }
+// Today log
+async function loadLog(){
+  const r=await fetch("/api/punch/today");
+  const list=await r.json();
+  const wrap=document.getElementById("today-log");
+  if(!list.length){wrap.innerHTML="<div class="log-empty">尚無打卡記錄</div>";return;}
+  wrap.innerHTML=list.map(r=>{
+    const t=r.punched_at?r.punched_at.slice(11,16):"";
+    const dist=r.gps_distance!=null?r.gps_distance+"m":"";
+    return "<div class="log-item">" +
+      "<span class="lb "+(LCLS[r.punch_type]||"")+"">"+(LABEL[r.punch_type]||r.punch_type)+"</span>" +
+      "<div><div class="log-time">"+t+"</div>" +
+      (dist?"<div class="log-sub">"+dist+"</div>":"") +
+      (r.is_manual?"<div class="log-sub">補打卡</div>":"") +
+      "</div></div>";
+  }).join("");
+}
+
+// Flash
+function showSuccess(name,type,time,dist){
+  document.getElementById("so-name").textContent=name;
+  document.getElementById("so-type").textContent=type+" 成功";
+  document.getElementById("so-time").textContent=time;
+  document.getElementById("so-dist").textContent=dist;
+  const el=document.getElementById("sov");
+  el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"),2400);
+}
+function showToast(msg){
+  const el=document.getElementById("toast");
+  el.textContent=msg;
+  el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"),3500);
+}
+async function apiFetch(url){ const r=await fetch(url); return r.json(); }
 </script>
 </body>
 </html>

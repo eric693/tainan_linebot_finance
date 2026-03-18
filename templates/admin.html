@@ -749,6 +749,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       <button class="inv-tab"        id="punchtab-records"  onclick="switchPunchTab('records')">打卡記錄</button>
       <button class="inv-tab"        id="punchtab-manual"   onclick="switchPunchTab('manual')">補打卡</button>
       <button class="inv-tab"        id="punchtab-staff"    onclick="switchPunchTab('staff')">員工管理</button>
+      <button class="inv-tab"        id="punchtab-gps"      onclick="switchPunchTab('gps')">GPS 設定</button>
     </div>
 
     <!-- ── 出勤摘要 ── -->
@@ -868,7 +869,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>姓名</th><th>職稱</th><th>PIN</th><th>狀態</th><th>操作</th></tr></thead>
+            <thead><tr><th>姓名</th><th>職稱</th><th>帳號</th><th>狀態</th><th>操作</th></tr></thead>
             <tbody id="punch-staff-tbody">
               <tr><td colspan="5" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr>
             </tbody>
@@ -877,6 +878,55 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       </div>
     </div>
 
+
+    <!-- ── GPS 設定 ── -->
+    <div id="punch-panel-gps" style="display:none">
+      <div style="max-width:520px">
+        <div class="card" style="padding:24px;margin-bottom:16px">
+          <div class="card-title" style="padding:0;margin-bottom:18px">打卡地點設定</div>
+
+          <div style="margin-bottom:14px">
+            <label class="form-label">地點名稱</label>
+            <input class="form-input" id="gps-loc-name" placeholder="例：公司門口" style="width:100%">
+          </div>
+          <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:160px">
+              <label class="form-label">緯度 Latitude</label>
+              <input class="form-input" id="gps-lat" placeholder="例：25.033964" type="number" step="0.000001">
+            </div>
+            <div style="flex:1;min-width:160px">
+              <label class="form-label">經度 Longitude</label>
+              <input class="form-input" id="gps-lng" placeholder="例：121.564468" type="number" step="0.000001">
+            </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label class="form-label">允許範圍（公尺）</label>
+            <input class="form-input" id="gps-radius" placeholder="100" type="number" min="10" max="5000" style="width:160px">
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">員工打卡時距離超過此範圍即失敗</div>
+          </div>
+          <div style="margin-bottom:20px;display:flex;align-items:center;gap:12px">
+            <label class="form-label" style="margin:0">強制驗證 GPS</label>
+            <select class="form-input" id="gps-required" style="width:auto">
+              <option value="0">否（記錄但不阻擋）</option>
+              <option value="1">是（超出範圍禁止打卡）</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn btn-outline" onclick="getMyGPS()">取得目前位置</button>
+            <button class="btn btn-primary" onclick="saveGpsSettings()">儲存設定</button>
+          </div>
+          <div id="gps-save-msg" style="font-size:12px;color:var(--green);margin-top:10px;min-height:16px"></div>
+        </div>
+        <div class="card" style="padding:16px 20px;background:var(--bg)">
+          <div style="font-size:12px;color:var(--muted);line-height:1.8">
+            <strong style="color:var(--text)">取得座標方式：</strong><br>
+            1. 點擊「取得目前位置」，瀏覽器會自動填入目前的 GPS 座標<br>
+            2. 或至 Google Maps 找到地點後，右鍵點擊地圖 → 座標會顯示在選單上方<br>
+            3. 格式範例：緯度 25.033964、經度 121.564468
+          </div>
+        </div>
+      </div>
+    </div>
   </div><!-- end page-punch -->
 
 </main>
@@ -885,7 +935,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
 <!-- Punch Staff Modal -->
 <div class="modal-overlay" id="punch-staff-modal" style="display:none">
-  <div class="modal" style="max-width:440px">
+  <div class="modal" style="max-width:480px">
     <div class="modal-header">
       <span class="modal-title" id="psm-title">新增員工</span>
       <button class="modal-close" onclick="closePunchStaffModal()">&times;</button>
@@ -893,14 +943,13 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <div class="modal-body">
       <input type="hidden" id="psm-id">
       <div class="form-row">
-        <div><label class="form-label">姓名 *</label><input class="form-input" id="psm-name" placeholder="員工姓名"></div>
+        <div><label class="form-label">姓名 *</label><input class="form-input" id="psm-name" placeholder="顯示名稱"></div>
         <div><label class="form-label">職稱</label><input class="form-input" id="psm-role" placeholder="例：外場、廚房"></div>
       </div>
       <div class="form-row">
         <div>
-          <label class="form-label">PIN（4 位數字）</label>
-          <input class="form-input" id="psm-pin" placeholder="不設定可留空" maxlength="4" type="text">
-          <div style="font-size:11px;color:var(--muted);margin-top:4px">留空表示無需 PIN 即可打卡</div>
+          <label class="form-label">登入帳號 *</label>
+          <input class="form-input" id="psm-username" placeholder="英文或數字" autocapitalize="none">
         </div>
         <div>
           <label class="form-label">狀態</label>
@@ -908,6 +957,17 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
             <option value="1">在職</option>
             <option value="0">停用</option>
           </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label class="form-label">密碼 *</label>
+          <input class="form-input" id="psm-password" placeholder="至少 4 個字元" type="password">
+          <div style="font-size:11px;color:var(--muted);margin-top:4px" id="psm-pw-hint">新增員工請輸入密碼</div>
+        </div>
+        <div>
+          <label class="form-label">確認密碼</label>
+          <input class="form-input" id="psm-password2" placeholder="再輸入一次" type="password">
         </div>
       </div>
     </div>
@@ -2479,7 +2539,7 @@ function initPunch() {
 }
 
 function switchPunchTab(tab) {
-  ['summary','records','manual','staff'].forEach(t => {
+  ['summary','records','manual','staff','gps'].forEach(t => {
     document.getElementById('punchtab-' + t).classList.toggle('active', t === tab);
     document.getElementById('punch-panel-' + t).style.display = t === tab ? '' : 'none';
   });
@@ -2487,6 +2547,7 @@ function switchPunchTab(tab) {
   if (tab === 'records') { loadPunchStaffOptions(); loadPunchRecords(); }
   if (tab === 'manual')  { loadManualStaffOptions(); loadManualRecords(); }
   if (tab === 'staff')   loadPunchStaff();
+  if (tab === 'gps')     loadGpsSettings();
 }
 
 // ── 出勤摘要 ──────────────────────────────────────────────────
@@ -2692,7 +2753,7 @@ async function loadPunchStaff() {
   tb.innerHTML = punchStaffList.map(s => `<tr>
     <td style="font-weight:600">${escHtml(s.name)}</td>
     <td style="color:var(--muted)">${escHtml(s.role||'')}</td>
-    <td style="font-family:'DM Mono',monospace">${s.pin ? '••••' : '<span style="color:var(--muted)">未設定</span>'}</td>
+    <td style="font-family:'DM Mono',monospace;font-size:12px">${escHtml(s.username||'—')}</td>
     <td>${s.active
       ? '<span class="badge badge-ok">在職</span>'
       : '<span class="badge badge-warn">停用</span>'}</td>
@@ -2705,32 +2766,40 @@ async function loadPunchStaff() {
 function openPunchStaffModal(id=null) {
   punchEditStaffId = id;
   document.getElementById('psm-title').textContent = id ? '編輯員工' : '新增員工';
+  document.getElementById('psm-password').value  = '';
+  document.getElementById('psm-password2').value = '';
   if (id) {
     const s = punchStaffList.find(x => x.id === id);
     if (!s) return;
-    document.getElementById('psm-id').value     = s.id;
-    document.getElementById('psm-name').value   = s.name;
-    document.getElementById('psm-role').value   = s.role || '';
-    document.getElementById('psm-pin').value    = '';
-    document.getElementById('psm-active').value = s.active ? '1' : '0';
+    document.getElementById('psm-id').value       = s.id;
+    document.getElementById('psm-name').value     = s.name;
+    document.getElementById('psm-role').value     = s.role || '';
+    document.getElementById('psm-username').value = s.username || '';
+    document.getElementById('psm-active').value   = s.active ? '1' : '0';
+    document.getElementById('psm-pw-hint').textContent = '留空表示不修改密碼';
   } else {
-    ['psm-id','psm-name','psm-role','psm-pin'].forEach(i => document.getElementById(i).value = '');
+    ['psm-id','psm-name','psm-role','psm-username'].forEach(i => document.getElementById(i).value = '');
     document.getElementById('psm-active').value = '1';
+    document.getElementById('psm-pw-hint').textContent = '新增員工請輸入密碼';
   }
   document.getElementById('punch-staff-modal').style.display = 'flex';
 }
 function closePunchStaffModal() { document.getElementById('punch-staff-modal').style.display = 'none'; }
 async function savePunchStaff() {
-  const id   = document.getElementById('psm-id').value;
-  const pin  = document.getElementById('psm-pin').value.trim();
-  if (pin && !/^\d{4}$/.test(pin)) { showToast('PIN 必須為 4 位數字', 'error'); return; }
+  const id  = document.getElementById('psm-id').value;
+  const pw  = document.getElementById('psm-password').value;
+  const pw2 = document.getElementById('psm-password2').value;
+  if (pw && pw !== pw2) { showToast('兩次密碼不一致', 'error'); return; }
+  if (!id && !pw)       { showToast('請設定密碼', 'error'); return; }
   const body = {
-    name:   document.getElementById('psm-name').value.trim(),
-    role:   document.getElementById('psm-role').value.trim(),
-    pin:    pin,
-    active: document.getElementById('psm-active').value === '1',
+    name:     document.getElementById('psm-name').value.trim(),
+    username: document.getElementById('psm-username').value.trim(),
+    role:     document.getElementById('psm-role').value.trim(),
+    password: pw,
+    active:   document.getElementById('psm-active').value === '1',
   };
-  if (!body.name) { showToast('請填寫姓名', 'error'); return; }
+  if (!body.name)     { showToast('請填寫姓名', 'error'); return; }
+  if (!body.username) { showToast('請填寫帳號', 'error'); return; }
   try {
     const url  = id ? `/api/punch/staff/${id}` : '/api/punch/staff';
     const meth = id ? 'PUT' : 'POST';
@@ -2962,6 +3031,54 @@ async function deleteSettlement(id) {
   await fetch(`/api/inv/settlements/${id}`, { method: 'DELETE' });
   showToast('已刪除結算記錄', 'success');
   await loadSettlementHistory();
+}
+
+
+// ── GPS 設定 ──────────────────────────────────────────────────
+async function loadGpsSettings() {
+  const r = await fetch('/api/punch/settings');
+  const d = await r.json();
+  document.getElementById('gps-loc-name').value = d.location_name || '';
+  document.getElementById('gps-lat').value      = d.lat || '';
+  document.getElementById('gps-lng').value      = d.lng || '';
+  document.getElementById('gps-radius').value   = d.radius_m || 100;
+  document.getElementById('gps-required').value = d.gps_required ? '1' : '0';
+}
+function getMyGPS() {
+  const msg = document.getElementById('gps-save-msg');
+  msg.style.color = 'var(--accent)';
+  msg.textContent = '正在取得目前位置...';
+  if (!navigator.geolocation) { msg.textContent = '裝置不支援 GPS'; return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    document.getElementById('gps-lat').value = pos.coords.latitude.toFixed(6);
+    document.getElementById('gps-lng').value = pos.coords.longitude.toFixed(6);
+    msg.style.color = 'var(--green)';
+    msg.textContent = '已取得目前位置，請確認後儲存';
+  }, err => {
+    msg.style.color = 'var(--red)';
+    msg.textContent = '無法取得位置：' + err.message;
+  }, { enableHighAccuracy: true, timeout: 10000 });
+}
+async function saveGpsSettings() {
+  const lat      = document.getElementById('gps-lat').value;
+  const lng      = document.getElementById('gps-lng').value;
+  const radius_m = parseInt(document.getElementById('gps-radius').value) || 100;
+  const location_name = document.getElementById('gps-loc-name').value.trim();
+  const gps_required  = document.getElementById('gps-required').value === '1';
+  const msg = document.getElementById('gps-save-msg');
+  try {
+    const res = await fetch('/api/punch/settings', {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ lat: lat ? parseFloat(lat) : null,
+                             lng: lng ? parseFloat(lng) : null,
+                             radius_m, location_name, gps_required })
+    });
+    const data = await res.json();
+    if (data.error) { msg.style.color='var(--red)'; msg.textContent = data.error; return; }
+    msg.style.color = 'var(--green)';
+    msg.textContent = '設定已儲存' + (location_name ? `（${location_name}）` : '');
+    showToast('GPS 設定已儲存', 'success');
+  } catch(e) { msg.style.color='var(--red)'; msg.textContent='儲存失敗'; }
 }
 
 </script>

@@ -171,12 +171,13 @@ def init_db():
             """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS punch_staff (
-                    id          SERIAL PRIMARY KEY,
-                    name        TEXT NOT NULL UNIQUE,
-                    pin         TEXT DEFAULT '',
-                    role        TEXT DEFAULT '',
-                    active      BOOLEAN DEFAULT TRUE,
-                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                    id              SERIAL PRIMARY KEY,
+                    name            TEXT NOT NULL UNIQUE,
+                    username        TEXT UNIQUE,
+                    password_hash   TEXT DEFAULT '',
+                    role            TEXT DEFAULT '',
+                    active          BOOLEAN DEFAULT TRUE,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
             conn.execute("""
@@ -188,8 +189,28 @@ def init_db():
                     note          TEXT DEFAULT '',
                     is_manual     BOOLEAN DEFAULT FALSE,
                     manual_by     TEXT DEFAULT '',
+                    latitude      NUMERIC(10,6),
+                    longitude     NUMERIC(10,6),
+                    gps_distance  INT,
                     created_at    TIMESTAMPTZ DEFAULT NOW()
                 )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS punch_settings (
+                    id          INT PRIMARY KEY DEFAULT 1,
+                    lat         NUMERIC(10,6),
+                    lng         NUMERIC(10,6),
+                    radius_m    INT DEFAULT 100,
+                    location_name TEXT DEFAULT '',
+                    gps_required BOOLEAN DEFAULT FALSE,
+                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            # Ensure default settings row exists
+            conn.execute("""
+                INSERT INTO punch_settings (id, gps_required)
+                VALUES (1, FALSE)
+                ON CONFLICT (id) DO NOTHING
             """)
         print("[OK] Database initialised")
     except Exception as e:
@@ -1367,84 +1388,192 @@ def api_inv_profit():
     return jsonify(result)
 
 
+
 # ═══════════════════════════════════════════════════════════════════
 # Punch Clock API
 # ═══════════════════════════════════════════════════════════════════
+import hashlib, math
+
+def _hash_pw(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
+
+def _gps_distance(lat1, lng1, lat2, lng2):
+    """Haversine distance in metres."""
+    R = 6371000
+    p = math.pi / 180
+    a = (math.sin((lat2-lat1)*p/2)**2 +
+         math.cos(lat1*p) * math.cos(lat2*p) *
+         math.sin((lng2-lng1)*p/2)**2)
+    return int(2 * R * math.asin(math.sqrt(a)))
 
 def punch_staff_row(row):
     if not row: return None
     d = dict(row)
+    d.pop('password_hash', None)   # never expose hash
     if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
     return d
 
 def punch_record_row(row):
     if not row: return None
     d = dict(row)
+    for f in ['latitude','longitude']:
+        if d.get(f) is not None: d[f] = float(d[f])
     if d.get('punched_at'): d['punched_at'] = d['punched_at'].isoformat()
     if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
     return d
 
-# ── Public punch page (no login required) ─────────────────────────
+# ── Employee punch session (separate from admin session) ───────────
 
 @app.route('/punch')
 def punch_page():
     return render_template('punch.html')
 
-@app.route('/api/punch/staff-public', methods=['GET'])
-def api_punch_staff_public():
-    """Return active staff list for punch page (no PIN exposed)."""
+@app.route('/api/punch/login', methods=['POST'])
+def api_punch_login():
+    b        = request.get_json(force=True)
+    username = b.get('username','').strip()
+    password = b.get('password','').strip()
+    if not username or not password:
+        return jsonify({'error': '請輸入帳號及密碼'}), 400
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, name, role FROM punch_staff WHERE active=TRUE ORDER BY name"
-        ).fetchall()
-    return jsonify([{'id': r['id'], 'name': r['name'], 'role': r['role']} for r in rows])
+        staff = conn.execute(
+            "SELECT * FROM punch_staff WHERE username=%s AND active=TRUE",
+            (username,)
+        ).fetchone()
+    if not staff or staff['password_hash'] != _hash_pw(password):
+        return jsonify({'error': '帳號或密碼錯誤'}), 401
+    # Store staff id in session under a separate key
+    session['punch_staff_id']   = staff['id']
+    session['punch_staff_name'] = staff['name']
+    return jsonify({'id': staff['id'], 'name': staff['name'], 'role': staff['role']})
+
+@app.route('/api/punch/logout', methods=['POST'])
+def api_punch_logout():
+    session.pop('punch_staff_id', None)
+    session.pop('punch_staff_name', None)
+    return jsonify({'ok': True})
+
+@app.route('/api/punch/me', methods=['GET'])
+def api_punch_me():
+    sid = session.get('punch_staff_id')
+    if not sid:
+        return jsonify({'error': 'not logged in'}), 401
+    with get_db() as conn:
+        staff = conn.execute(
+            "SELECT id,name,role FROM punch_staff WHERE id=%s AND active=TRUE", (sid,)
+        ).fetchone()
+    if not staff:
+        session.pop('punch_staff_id', None)
+        return jsonify({'error': 'not logged in'}), 401
+    return jsonify(dict(staff))
+
+# ── GPS settings (public read for punch page) ──────────────────────
+
+@app.route('/api/punch/settings', methods=['GET'])
+def api_punch_settings_get():
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM punch_settings WHERE id=1").fetchone()
+    if not row:
+        return jsonify({'gps_required': False, 'radius_m': 100})
+    d = dict(row)
+    for f in ['lat','lng']:
+        if d.get(f) is not None: d[f] = float(d[f])
+    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
+    return jsonify(d)
+
+@app.route('/api/punch/settings', methods=['PUT'])
+@login_required
+def api_punch_settings_update():
+    b = request.get_json(force=True)
+    lat          = float(b['lat'])          if b.get('lat')          else None
+    lng          = float(b['lng'])          if b.get('lng')          else None
+    radius_m     = int(b.get('radius_m') or 100)
+    location_name= b.get('location_name','').strip()
+    gps_required = bool(b.get('gps_required', False))
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE punch_settings
+            SET lat=%s, lng=%s, radius_m=%s, location_name=%s,
+                gps_required=%s, updated_at=NOW()
+            WHERE id=1 RETURNING *
+        """, (lat, lng, radius_m, location_name, gps_required)).fetchone()
+    d = dict(row)
+    for f in ['lat','lng']:
+        if d.get(f) is not None: d[f] = float(d[f])
+    return jsonify(d)
+
+# ── Clock in/out (requires punch session + GPS check) ─────────────
 
 @app.route('/api/punch/clock', methods=['POST'])
 def api_punch_clock():
-    """Public punch endpoint — verifies PIN if set."""
-    import pytz
-    b = request.get_json(force=True)
-    staff_id   = b.get('staff_id')
-    punch_type = b.get('punch_type')   # 'in' | 'out' | 'break_out' | 'break_in'
-    pin_input  = b.get('pin', '').strip()
+    sid = session.get('punch_staff_id')
+    if not sid:
+        return jsonify({'error': '請先登入'}), 401
 
-    if not staff_id or punch_type not in ('in', 'out', 'break_out', 'break_in'):
-        return jsonify({'error': '參數錯誤'}), 400
+    b          = request.get_json(force=True)
+    punch_type = b.get('punch_type')
+    lat        = b.get('lat')
+    lng        = b.get('lng')
+
+    if punch_type not in ('in','out','break_out','break_in'):
+        return jsonify({'error': '無效的打卡類型'}), 400
 
     with get_db() as conn:
         staff = conn.execute(
-            "SELECT * FROM punch_staff WHERE id=%s AND active=TRUE", (staff_id,)
+            "SELECT * FROM punch_staff WHERE id=%s AND active=TRUE", (sid,)
         ).fetchone()
         if not staff:
             return jsonify({'error': '員工不存在'}), 404
 
-        # PIN check
-        if staff['pin'] and staff['pin'] != pin_input:
-            return jsonify({'error': 'PIN 錯誤'}), 403
+        settings = conn.execute("SELECT * FROM punch_settings WHERE id=1").fetchone()
 
-        # Prevent duplicate in/out within 1 minute
+    # GPS check
+    gps_distance = None
+    if settings and settings['gps_required']:
+        if lat is None or lng is None:
+            return jsonify({'error': '無法取得 GPS，請允許定位權限後重試'}), 403
+        if settings['lat'] is None:
+            return jsonify({'error': '管理員尚未設定打卡地點'}), 403
+        dist = _gps_distance(lat, lng, float(settings['lat']), float(settings['lng']))
+        gps_distance = dist
+        if dist > int(settings['radius_m']):
+            return jsonify({
+                'error': f'您距離打卡地點 {dist} 公尺，超出允許範圍（{settings["radius_m"]} 公尺）',
+                'distance': dist,
+                'radius': settings['radius_m']
+            }), 403
+    elif lat is not None and lng is not None and settings and settings['lat']:
+        # GPS not required but record distance anyway
+        gps_distance = _gps_distance(lat, lng, float(settings['lat']), float(settings['lng']))
+
+    # Prevent duplicate within 1 min
+    with get_db() as conn:
         recent = conn.execute("""
             SELECT id FROM punch_records
             WHERE staff_id=%s AND punch_type=%s
               AND punched_at > NOW() - INTERVAL '1 minute'
-        """, (staff_id, punch_type)).fetchone()
+        """, (sid, punch_type)).fetchone()
         if recent:
             return jsonify({'error': '1 分鐘內已打過卡'}), 429
 
         row = conn.execute("""
-            INSERT INTO punch_records (staff_id, punch_type, note)
-            VALUES (%s, %s, '') RETURNING *
-        """, (staff_id, punch_type)).fetchone()
+            INSERT INTO punch_records
+              (staff_id, punch_type, latitude, longitude, gps_distance)
+            VALUES (%s, %s, %s, %s, %s) RETURNING *
+        """, (sid, punch_type,
+              lat if lat is not None else None,
+              lng if lng is not None else None,
+              gps_distance)).fetchone()
 
     d = punch_record_row(row)
-    d['staff_name'] = staff['name']
+    d['staff_name']   = staff['name']
+    d['gps_distance'] = gps_distance
     return jsonify(d), 201
 
 @app.route('/api/punch/today', methods=['GET'])
 def api_punch_today():
-    """Return today's punches for a staff (for punch page display)."""
-    staff_id = request.args.get('staff_id')
-    if not staff_id:
+    sid = session.get('punch_staff_id')
+    if not sid:
         return jsonify([])
     with get_db() as conn:
         rows = conn.execute("""
@@ -1453,48 +1582,68 @@ def api_punch_today():
             WHERE pr.staff_id=%s
               AND pr.punched_at::date = NOW()::date
             ORDER BY pr.punched_at ASC
-        """, (staff_id,)).fetchall()
+        """, (sid,)).fetchall()
     return jsonify([punch_record_row(r) for r in rows])
 
-# ── Admin punch staff CRUD ─────────────────────────────────────────
+# ── Admin: staff CRUD ──────────────────────────────────────────────
 
 @app.route('/api/punch/staff', methods=['GET'])
 @login_required
 def api_punch_staff_list():
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM punch_staff ORDER BY name"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM punch_staff ORDER BY name").fetchall()
     return jsonify([punch_staff_row(r) for r in rows])
 
 @app.route('/api/punch/staff', methods=['POST'])
 @login_required
 def api_punch_staff_create():
-    b = request.get_json(force=True)
-    if not b.get('name','').strip():
+    b        = request.get_json(force=True)
+    name     = b.get('name','').strip()
+    username = b.get('username','').strip()
+    password = b.get('password','').strip()
+    if not name:
         return jsonify({'error': '姓名為必填'}), 400
+    if not username:
+        return jsonify({'error': '帳號為必填'}), 400
+    if not password or len(password) < 4:
+        return jsonify({'error': '密碼至少 4 個字元'}), 400
     try:
         with get_db() as conn:
             row = conn.execute("""
-                INSERT INTO punch_staff (name, pin, role)
-                VALUES (%s, %s, %s) RETURNING *
-            """, (b['name'].strip(), b.get('pin','').strip(), b.get('role','').strip())
+                INSERT INTO punch_staff (name, username, password_hash, role)
+                VALUES (%s, %s, %s, %s) RETURNING *
+            """, (name, username, _hash_pw(password), b.get('role','').strip())
             ).fetchone()
         return jsonify(punch_staff_row(row)), 201
     except psycopg.errors.UniqueViolation:
-        return jsonify({'error': '員工姓名已存在'}), 409
+        return jsonify({'error': '姓名或帳號已存在'}), 409
 
 @app.route('/api/punch/staff/<int:sid>', methods=['PUT'])
 @login_required
 def api_punch_staff_update(sid):
-    b = request.get_json(force=True)
+    b        = request.get_json(force=True)
+    name     = b.get('name','').strip()
+    username = b.get('username','').strip()
+    password = b.get('password','').strip()   # empty = don't change
+    role     = b.get('role','').strip()
+    active   = bool(b.get('active', True))
+    if not name or not username:
+        return jsonify({'error': '姓名和帳號為必填'}), 400
     with get_db() as conn:
-        row = conn.execute("""
-            UPDATE punch_staff SET name=%s, pin=%s, role=%s, active=%s
-            WHERE id=%s RETURNING *
-        """, (b.get('name','').strip(), b.get('pin','').strip(),
-              b.get('role','').strip(), bool(b.get('active', True)), sid)
-        ).fetchone()
+        if password:
+            if len(password) < 4:
+                return jsonify({'error': '密碼至少 4 個字元'}), 400
+            row = conn.execute("""
+                UPDATE punch_staff
+                SET name=%s, username=%s, password_hash=%s, role=%s, active=%s
+                WHERE id=%s RETURNING *
+            """, (name, username, _hash_pw(password), role, active, sid)).fetchone()
+        else:
+            row = conn.execute("""
+                UPDATE punch_staff
+                SET name=%s, username=%s, role=%s, active=%s
+                WHERE id=%s RETURNING *
+            """, (name, username, role, active, sid)).fetchone()
     return jsonify(punch_staff_row(row)) if row else ('', 404)
 
 @app.route('/api/punch/staff/<int:sid>', methods=['DELETE'])
@@ -1504,7 +1653,7 @@ def api_punch_staff_delete(sid):
         conn.execute("DELETE FROM punch_staff WHERE id=%s", (sid,))
     return jsonify({'deleted': sid})
 
-# ── Admin punch records ────────────────────────────────────────────
+# ── Admin: records CRUD ────────────────────────────────────────────
 
 @app.route('/api/punch/records', methods=['GET'])
 @login_required
@@ -1512,18 +1661,17 @@ def api_punch_records():
     staff_id  = request.args.get('staff_id')
     date_from = request.args.get('date_from')
     date_to   = request.args.get('date_to')
-    month     = request.args.get('month')        # YYYY-MM
+    month     = request.args.get('month')
 
-    conds = ["TRUE"]
-    params = []
+    conds, params = ["TRUE"], []
     if staff_id:
-        conds.append("pr.staff_id = %s"); params.append(int(staff_id))
+        conds.append("pr.staff_id=%s"); params.append(int(staff_id))
     if month:
-        conds.append("TO_CHAR(pr.punched_at, 'YYYY-MM') = %s"); params.append(month)
+        conds.append("TO_CHAR(pr.punched_at,'YYYY-MM')=%s"); params.append(month)
     elif date_from:
-        conds.append("pr.punched_at::date >= %s"); params.append(date_from)
+        conds.append("pr.punched_at::date>=%s"); params.append(date_from)
         if date_to:
-            conds.append("pr.punched_at::date <= %s"); params.append(date_to)
+            conds.append("pr.punched_at::date<=%s"); params.append(date_to)
 
     where = " AND ".join(conds)
     with get_db() as conn:
@@ -1531,33 +1679,30 @@ def api_punch_records():
             SELECT pr.*, ps.name as staff_name, ps.role as staff_role
             FROM punch_records pr JOIN punch_staff ps ON ps.id=pr.staff_id
             WHERE {where}
-            ORDER BY pr.punched_at DESC
-            LIMIT 500
+            ORDER BY pr.punched_at DESC LIMIT 500
         """, params).fetchall()
     return jsonify([punch_record_row(r) for r in rows])
 
 @app.route('/api/punch/records', methods=['POST'])
 @login_required
 def api_punch_record_manual():
-    """Admin manual / correction punch."""
-    b = request.get_json(force=True)
+    b          = request.get_json(force=True)
     staff_id   = b.get('staff_id')
     punch_type = b.get('punch_type')
-    punched_at = b.get('punched_at')    # ISO string
-    note       = b.get('note', '').strip()
-    manual_by  = b.get('manual_by', '').strip()
-
+    punched_at = b.get('punched_at')
+    note       = b.get('note','').strip()
+    manual_by  = b.get('manual_by','').strip()
     if not all([staff_id, punch_type, punched_at]):
         return jsonify({'error': '缺少必要欄位'}), 400
-    if punch_type not in ('in', 'out', 'break_out', 'break_in'):
+    if punch_type not in ('in','out','break_out','break_in'):
         return jsonify({'error': '無效的打卡類型'}), 400
-
     with get_db() as conn:
         row = conn.execute("""
-            INSERT INTO punch_records (staff_id, punch_type, punched_at, note, is_manual, manual_by)
-            VALUES (%s, %s, %s, %s, TRUE, %s) RETURNING *
+            INSERT INTO punch_records
+              (staff_id, punch_type, punched_at, note, is_manual, manual_by)
+            VALUES (%s,%s,%s,%s,TRUE,%s) RETURNING *
         """, (staff_id, punch_type, punched_at, note, manual_by)).fetchone()
-        staff = conn.execute("SELECT name FROM punch_staff WHERE id=%s", (staff_id,)).fetchone()
+        staff = conn.execute("SELECT name FROM punch_staff WHERE id=%s",(staff_id,)).fetchone()
     d = punch_record_row(row)
     if staff: d['staff_name'] = staff['name']
     return jsonify(d), 201
@@ -1579,192 +1724,43 @@ def api_punch_record_update(rid):
 @login_required
 def api_punch_record_delete(rid):
     with get_db() as conn:
-        conn.execute("DELETE FROM punch_records WHERE id=%s", (rid,))
+        conn.execute("DELETE FROM punch_records WHERE id=%s",(rid,))
     return jsonify({'deleted': rid})
 
 @app.route('/api/punch/summary', methods=['GET'])
 @login_required
 def api_punch_summary():
-    """Daily summary: pair in/out per staff per day."""
-    month = request.args.get('month')   # YYYY-MM, defaults to current
-    if not month:
-        from datetime import datetime
-        month = datetime.now().strftime('%Y-%m')
+    from datetime import datetime
+    month = request.args.get('month') or datetime.now().strftime('%Y-%m')
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT
-                ps.id as staff_id,
-                ps.name as staff_name,
-                pr.punched_at::date as work_date,
-                MIN(CASE WHEN pr.punch_type='in'  THEN pr.punched_at END) as clock_in,
-                MAX(CASE WHEN pr.punch_type='out' THEN pr.punched_at END) as clock_out,
-                COUNT(*) as punch_count,
-                BOOL_OR(pr.is_manual) as has_manual
-            FROM punch_records pr
-            JOIN punch_staff ps ON ps.id=pr.staff_id
-            WHERE TO_CHAR(pr.punched_at, 'YYYY-MM') = %s
+            SELECT ps.id as staff_id, ps.name as staff_name,
+                   pr.punched_at::date as work_date,
+                   MIN(CASE WHEN pr.punch_type='in'  THEN pr.punched_at END) as clock_in,
+                   MAX(CASE WHEN pr.punch_type='out' THEN pr.punched_at END) as clock_out,
+                   COUNT(*) as punch_count,
+                   BOOL_OR(pr.is_manual) as has_manual
+            FROM punch_records pr JOIN punch_staff ps ON ps.id=pr.staff_id
+            WHERE TO_CHAR(pr.punched_at,'YYYY-MM')=%s
             GROUP BY ps.id, ps.name, pr.punched_at::date
             ORDER BY pr.punched_at::date DESC, ps.name
         """, (month,)).fetchall()
-
     result = []
     for r in rows:
         d = dict(r)
-        d['work_date']  = d['work_date'].isoformat() if d['work_date'] else None
-        d['clock_in']   = d['clock_in'].isoformat()  if d['clock_in']  else None
-        d['clock_out']  = d['clock_out'].isoformat() if d['clock_out'] else None
-        # Work duration in minutes
+        d['work_date']  = d['work_date'].isoformat()  if d['work_date']  else None
+        d['clock_in']   = d['clock_in'].isoformat()   if d['clock_in']   else None
+        d['clock_out']  = d['clock_out'].isoformat()  if d['clock_out']  else None
         if d['clock_in'] and d['clock_out']:
             from datetime import datetime as _dt
             ci = _dt.fromisoformat(d['clock_in'].replace('Z',''))
             co = _dt.fromisoformat(d['clock_out'].replace('Z',''))
-            d['duration_min'] = max(0, int((co - ci).total_seconds() / 60))
+            d['duration_min'] = max(0, int((co-ci).total_seconds()/60))
         else:
             d['duration_min'] = None
         result.append(d)
     return jsonify(result)
 
-
-# ── Inventory Settlements ─────────────────────────────────────────
-
-@app.route('/api/inv/settlements', methods=['GET'])
-@login_required
-def api_inv_settlements_list():
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, month, settled_by, note, settled_at FROM inv_settlements ORDER BY settled_at DESC"
-        ).fetchall()
-    result = []
-    for r in rows:
-        d = dict(r)
-        if d.get('settled_at'): d['settled_at'] = d['settled_at'].isoformat()
-        result.append(d)
-    return jsonify(result)
-
-
-@app.route('/api/inv/settlements/<int:sid>', methods=['GET'])
-@login_required
-def api_inv_settlement_get(sid):
-    import json as _j
-    with get_db() as conn:
-        row = conn.execute("SELECT * FROM inv_settlements WHERE id=%s", (sid,)).fetchone()
-    if not row: return ('', 404)
-    d = dict(row)
-    if d.get('settled_at'): d['settled_at'] = d['settled_at'].isoformat()
-    if isinstance(d.get('snapshot'), str):
-        d['snapshot'] = _j.loads(d['snapshot'])
-    return jsonify(d)
-
-
-@app.route('/api/inv/settlements/preview', methods=['GET'])
-@login_required
-def api_inv_settlement_preview():
-    """Return current stock of all items for pre-settlement review."""
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, code, name, category, unit_label, unit_cost, current_stock, min_stock, vendor FROM inv_items ORDER BY code"
-        ).fetchall()
-    return jsonify([{
-        'id': r['id'], 'code': r['code'], 'name': r['name'],
-        'category': r['category'], 'unit_label': r['unit_label'],
-        'unit_cost': float(r['unit_cost']), 'current_stock': float(r['current_stock']),
-        'min_stock': float(r['min_stock']), 'vendor': r['vendor'],
-        'counted': None,  # to be filled by user
-    } for r in rows])
-
-
-@app.route('/api/inv/settlements', methods=['POST'])
-@login_required
-def api_inv_settlement_create():
-    """
-    Execute month-end settlement:
-    1. Save snapshot of before/after per item
-    2. Adjust current_stock to counted value for each item
-    3. Insert settlement record
-    """
-    import json as _j
-    b = request.get_json(force=True)
-    month      = b.get('month', '')        # e.g. "2026-03"
-    settled_by = b.get('settled_by', '')
-    note       = b.get('note', '')
-    items      = b.get('items', [])        # [{ id, counted }]
-
-    if not month:
-        return jsonify({'error': '請填入結算月份'}), 400
-    if not items:
-        return jsonify({'error': '請填入盤點數量'}), 400
-
-    snapshot = []
-    with get_db() as conn:
-        # Check duplicate
-        dup = conn.execute(
-            "SELECT id FROM inv_settlements WHERE month=%s", (month,)
-        ).fetchone()
-        if dup:
-            return jsonify({'error': f'{month} 已結算過，如需重新結算請先刪除舊記錄'}), 409
-
-        for it in items:
-            item_id = int(it['id'])
-            counted = float(it.get('counted') or 0)
-
-            # Get current system stock
-            row = conn.execute(
-                "SELECT code, name, unit_label, unit_cost, current_stock FROM inv_items WHERE id=%s",
-                (item_id,)
-            ).fetchone()
-            if not row: continue
-
-            system_stock = float(row['current_stock'])
-            variance     = counted - system_stock
-
-            snapshot.append({
-                'item_id':      item_id,
-                'code':         row['code'],
-                'name':         row['name'],
-                'unit_label':   row['unit_label'],
-                'unit_cost':    float(row['unit_cost']),
-                'system_stock': system_stock,
-                'counted':      counted,
-                'variance':     variance,
-            })
-
-            # Adjust stock to counted value
-            conn.execute(
-                "UPDATE inv_items SET current_stock=%s, updated_at=NOW() WHERE id=%s",
-                (counted, item_id)
-            )
-            # Record adjustment transaction
-            if variance != 0:
-                conn.execute("""
-                    INSERT INTO inv_transactions (item_id, txn_type, quantity, note, staff)
-                    VALUES (%s, 'adjust', %s, %s, %s)
-                """, (item_id, variance,
-                      f'{month} 月結盤點調整（系統:{system_stock} → 盤點:{counted}）',
-                      settled_by))
-
-        # Save settlement record
-        snap_json = _j.dumps(snapshot, ensure_ascii=False)
-        rec = conn.execute("""
-            INSERT INTO inv_settlements (month, settled_by, note, snapshot)
-            VALUES (%s, %s, %s, %s::jsonb) RETURNING id, month, settled_at
-        """, (month, settled_by, note, snap_json)).fetchone()
-
-    return jsonify({
-        'id':          rec['id'],
-        'month':       rec['month'],
-        'settled_at':  rec['settled_at'].isoformat(),
-        'item_count':  len(snapshot),
-        'adjusted':    sum(1 for s in snapshot if s['variance'] != 0),
-        'snapshot':    snapshot,
-    }), 201
-
-
-@app.route('/api/inv/settlements/<int:sid>', methods=['DELETE'])
-@login_required
-def api_inv_settlement_delete(sid):
-    with get_db() as conn:
-        conn.execute("DELETE FROM inv_settlements WHERE id=%s", (sid,))
-    return jsonify({'deleted': sid})
 
 @app.route('/')
 def index():
