@@ -214,25 +214,30 @@ def init_db():
                 VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
             """)
-        # ── Schema migrations (safe: ADD COLUMN IF NOT EXISTS) ────────
-        migrations = [
-            # punch_staff: add username & password_hash if upgrading from old schema
-            "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS username TEXT",
-            "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT ''",
-            # punch_records: add GPS columns if upgrading
-            "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS latitude NUMERIC(10,6)",
-            "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS longitude NUMERIC(10,6)",
-            "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS gps_distance INT",
-        ]
-        for sql in migrations:
-            try:
-                conn.execute(sql)
-            except Exception as me:
-                print(f"[MIGRATION SKIP] {sql[:60]}: {me}")
-        print("[OK] Database initialised")
+        print("[OK] Database tables created")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
         raise
+
+    # ── Schema migrations — each in its OWN connection/transaction ──
+    # PostgreSQL aborts the entire transaction on error, so we MUST
+    # run each ALTER TABLE in a separate connection & transaction.
+    migrations = [
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS username TEXT",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT ''",
+        "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS latitude NUMERIC(10,6)",
+        "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS longitude NUMERIC(10,6)",
+        "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS gps_distance INT",
+    ]
+    for sql in migrations:
+        try:
+            with get_db() as mc:
+                mc.execute(sql)
+            print(f"[MIGRATION OK] {sql[:70]}")
+        except Exception as me:
+            print(f"[MIGRATION SKIP] {sql[:70]}: {me}")
+
+    print("[OK] Database initialised")
 
 
 def row_to_dict(row):
