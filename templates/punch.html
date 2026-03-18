@@ -217,21 +217,26 @@ function startGPS(){
 }
 function gpsOk(pos){
   gpsPos={lat:pos.coords.latitude,lng:pos.coords.longitude};
-  const req = settings && settings.gps_required;
-  const hasBase = settings && settings.lat;
-  if(hasBase){
-    const dist=hav(gpsPos.lat,gpsPos.lng,settings.lat,settings.lng);
-    const r=settings.radius_m||100;
-    if(dist<=r){
-      gpsBar("ok","距離打卡地點 "+dist+" 公尺（範圍 "+r+"m）");
-      setBtns(false);
-    } else {
-      gpsBar("warn","距離 "+dist+" 公尺，超出範圍 "+r+"m");
-      setBtns(req,"超出打卡範圍");
-    }
-  } else {
+  const locs = settings && settings.locations || [];
+  const req  = settings && settings.gps_required;
+  if(!locs.length){
     gpsBar("ok","定位成功");
     setBtns(false);
+    return;
+  }
+  // Find nearest location
+  let minDist=null, minLoc=null;
+  locs.forEach(loc=>{
+    const d=hav(gpsPos.lat,gpsPos.lng,loc.lat,loc.lng);
+    if(minDist===null||d<minDist){minDist=d;minLoc=loc;}
+  });
+  const r=minLoc.radius_m||100;
+  if(minDist<=r){
+    gpsBar("ok","「"+minLoc.location_name+"」範圍內（"+minDist+"m）");
+    setBtns(false);
+  } else {
+    gpsBar("warn","距最近地點「"+minLoc.location_name+"」"+minDist+"m，超出範圍 "+r+"m");
+    setBtns(req,"超出打卡範圍");
   }
 }
 function gpsErr(e){

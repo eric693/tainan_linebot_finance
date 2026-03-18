@@ -881,57 +881,89 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
     <!-- ── GPS 設定 ── -->
     <div id="punch-panel-gps" style="display:none">
-      <div style="max-width:520px">
-        <div class="card" style="padding:24px;margin-bottom:16px">
-          <div class="card-title" style="padding:0;margin-bottom:18px">打卡地點設定</div>
 
-          <div style="margin-bottom:14px">
-            <label class="form-label">地點名稱</label>
-            <input class="form-input" id="gps-loc-name" placeholder="例：公司門口" style="width:100%">
-          </div>
-          <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap">
-            <div style="flex:1;min-width:160px">
-              <label class="form-label">緯度 Latitude</label>
-              <input class="form-input" id="gps-lat" placeholder="例：25.033964" type="number" step="0.000001">
-            </div>
-            <div style="flex:1;min-width:160px">
-              <label class="form-label">經度 Longitude</label>
-              <input class="form-input" id="gps-lng" placeholder="例：121.564468" type="number" step="0.000001">
-            </div>
-          </div>
-          <div style="margin-bottom:14px">
-            <label class="form-label">允許範圍（公尺）</label>
-            <input class="form-input" id="gps-radius" placeholder="100" type="number" min="10" max="5000" style="width:160px">
-            <div style="font-size:11px;color:var(--muted);margin-top:4px">員工打卡時距離超過此範圍即失敗</div>
-          </div>
-          <div style="margin-bottom:20px;display:flex;align-items:center;gap:12px">
-            <label class="form-label" style="margin:0">強制驗證 GPS</label>
-            <select class="form-input" id="gps-required" style="width:auto">
-              <option value="0">否（記錄但不阻擋）</option>
-              <option value="1">是（超出範圍禁止打卡）</option>
-            </select>
-          </div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <button class="btn btn-outline" onclick="getMyGPS()">取得目前位置</button>
-            <button class="btn btn-primary" onclick="saveGpsSettings()">儲存設定</button>
-          </div>
-          <div id="gps-save-msg" style="font-size:12px;color:var(--green);margin-top:10px;min-height:16px"></div>
-        </div>
-        <div class="card" style="padding:16px 20px;background:var(--bg)">
-          <div style="font-size:12px;color:var(--muted);line-height:1.8">
-            <strong style="color:var(--text)">取得座標方式：</strong><br>
-            1. 點擊「取得目前位置」，瀏覽器會自動填入目前的 GPS 座標<br>
-            2. 或至 Google Maps 找到地點後，右鍵點擊地圖 → 座標會顯示在選單上方<br>
-            3. 格式範例：緯度 25.033964、經度 121.564468
-          </div>
+      <!-- 全域設定 -->
+      <div class="filter-bar" style="margin-bottom:20px;gap:14px;flex-wrap:wrap">
+        <span class="filter-label">GPS 驗證模式</span>
+        <select class="filter-input" id="gps-required" onchange="saveGpsConfig()" style="min-width:220px">
+          <option value="0">不強制（記錄距離但不阻擋打卡）</option>
+          <option value="1">強制（超出所有地點範圍則禁止打卡）</option>
+        </select>
+        <span style="font-size:12px;color:var(--muted)">變更後自動儲存</span>
+      </div>
+
+      <!-- 地點列表 -->
+      <div class="section-head">
+        <span id="gps-loc-count" style="font-size:13px;color:var(--muted)">載入中...</span>
+        <button class="btn btn-primary" onclick="openLocModal()">新增地點</button>
+      </div>
+
+      <div id="gps-loc-list" style="margin-bottom:20px"></div>
+
+      <!-- 取得座標說明 -->
+      <div class="card" style="padding:16px 20px;background:var(--bg)">
+        <div style="font-size:12px;color:var(--muted);line-height:2">
+          <strong style="color:var(--text)">如何取得 GPS 座標：</strong><br>
+          1. 在新增/編輯地點視窗中點擊「取得目前位置」，瀏覽器自動填入<br>
+          2. 或至 Google Maps 找到地點，右鍵點擊地圖 → 座標顯示在選單第一行<br>
+          3. 格式範例：緯度 25.033964、經度 121.564468
         </div>
       </div>
+
     </div>
   </div><!-- end page-punch -->
 
 </main>
 
 
+
+
+<!-- GPS Location Modal -->
+<div class="modal-overlay" id="gps-loc-modal" style="display:none">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <span class="modal-title" id="glm-title">新增打卡地點</span>
+      <button class="modal-close" onclick="closeLocModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="glm-id">
+      <div style="margin-bottom:14px">
+        <label class="form-label">地點名稱 *</label>
+        <input class="form-input" id="glm-name" placeholder="例：公司門口、二樓辦公室" style="width:100%">
+      </div>
+      <div class="form-row">
+        <div>
+          <label class="form-label">緯度 Latitude *</label>
+          <input class="form-input" id="glm-lat" placeholder="例：25.033964" type="number" step="0.000001">
+        </div>
+        <div>
+          <label class="form-label">經度 Longitude *</label>
+          <input class="form-input" id="glm-lng" placeholder="例：121.564468" type="number" step="0.000001">
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <label class="form-label">允許範圍（公尺）</label>
+        <input class="form-input" id="glm-radius" type="number" min="10" max="5000" value="100" style="width:140px">
+        <span style="font-size:12px;color:var(--muted);margin-left:10px">超出此距離即視為不在範圍內</span>
+      </div>
+      <div style="margin-bottom:6px">
+        <label class="form-label">狀態</label>
+        <select class="form-input" id="glm-active" style="width:auto">
+          <option value="1">啟用</option>
+          <option value="0">停用</option>
+        </select>
+      </div>
+      <div style="margin-top:14px">
+        <button class="btn btn-outline btn-sm" onclick="getLocGPS()">取得目前位置</button>
+        <span id="glm-gps-msg" style="font-size:12px;color:var(--muted);margin-left:10px"></span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeLocModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveLocation()">儲存</button>
+    </div>
+  </div>
+</div>
 
 <!-- Punch Staff Modal -->
 <div class="modal-overlay" id="punch-staff-modal" style="display:none">
@@ -3034,51 +3066,136 @@ async function deleteSettlement(id) {
 }
 
 
-// ── GPS 設定 ──────────────────────────────────────────────────
+// ── GPS 多地點設定 ────────────────────────────────────────────
+let gpsLocList    = [];
+let editingLocId  = null;
+
 async function loadGpsSettings() {
-  const r = await fetch('/api/punch/settings');
-  const d = await r.json();
-  document.getElementById('gps-loc-name').value = d.location_name || '';
-  document.getElementById('gps-lat').value      = d.lat || '';
-  document.getElementById('gps-lng').value      = d.lng || '';
-  document.getElementById('gps-radius').value   = d.radius_m || 100;
-  document.getElementById('gps-required').value = d.gps_required ? '1' : '0';
+  // Load config
+  const cfg = await fetch('/api/punch/config').then(r=>r.json()).catch(()=>({}));
+  // /api/punch/settings returns both config + locations
+  const s   = await fetch('/api/punch/settings').then(r=>r.json()).catch(()=>({}));
+  document.getElementById('gps-required').value = s.gps_required ? '1' : '0';
+  // Load all locations (admin endpoint)
+  const res = await fetch('/api/punch/locations');
+  gpsLocList = await res.json();
+  renderLocList();
 }
-function getMyGPS() {
-  const msg = document.getElementById('gps-save-msg');
-  msg.style.color = 'var(--accent)';
-  msg.textContent = '正在取得目前位置...';
-  if (!navigator.geolocation) { msg.textContent = '裝置不支援 GPS'; return; }
+
+async function saveGpsConfig() {
+  const val = document.getElementById('gps-required').value === '1';
+  await fetch('/api/punch/config', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ gps_required: val })
+  });
+  showToast(val ? 'GPS 驗證已開啟' : 'GPS 驗證已關閉', 'success');
+}
+
+function renderLocList() {
+  const wrap = document.getElementById('gps-loc-list');
+  const cnt  = document.getElementById('gps-loc-count');
+  cnt.textContent = `共 ${gpsLocList.length} 個打卡地點`;
+  if (!gpsLocList.length) {
+    wrap.innerHTML = '<div class="card" style="padding:32px;text-align:center;color:var(--muted)">尚無打卡地點，點擊「新增地點」開始設定</div>';
+    return;
+  }
+  wrap.innerHTML = gpsLocList.map(loc => `
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-header" style="flex-wrap:wrap;gap:10px">
+        <div>
+          <span class="card-title">${escHtml(loc.location_name)}</span>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px;font-family:'DM Mono',monospace">
+            ${loc.lat}, ${loc.lng} &nbsp;|&nbsp; 範圍 ${loc.radius_m}m
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${loc.active
+            ? '<span class="badge badge-ok">啟用中</span>'
+            : '<span class="badge badge-warn">停用</span>'}
+          <button class="btn btn-outline btn-sm" onclick="openLocModal(${loc.id})">編輯</button>
+          <button class="btn btn-danger  btn-sm" onclick="deleteLocation(${loc.id})">刪除</button>
+        </div>
+      </div>
+      <div style="padding:12px 20px;background:var(--bg);display:flex;gap:24px;font-size:12px;flex-wrap:wrap">
+        <span><strong style="color:var(--navy)">緯度</strong> <span style="font-family:'DM Mono',monospace">${loc.lat}</span></span>
+        <span><strong style="color:var(--navy)">經度</strong> <span style="font-family:'DM Mono',monospace">${loc.lng}</span></span>
+        <span><strong style="color:var(--navy)">允許範圍</strong> ${loc.radius_m} 公尺</span>
+        <a href="https://www.google.com/maps?q=${loc.lat},${loc.lng}" target="_blank"
+          style="color:var(--accent);text-decoration:none;font-weight:600">在 Google Maps 查看</a>
+      </div>
+    </div>`).join('');
+}
+
+// ── Location Modal ─────────────────────────────────────────────
+function openLocModal(id=null) {
+  editingLocId = id;
+  document.getElementById('glm-title').textContent = id ? '編輯打卡地點' : '新增打卡地點';
+  document.getElementById('glm-gps-msg').textContent = '';
+  if (id) {
+    const loc = gpsLocList.find(x => x.id === id);
+    if (!loc) return;
+    document.getElementById('glm-id').value     = loc.id;
+    document.getElementById('glm-name').value   = loc.location_name;
+    document.getElementById('glm-lat').value    = loc.lat;
+    document.getElementById('glm-lng').value    = loc.lng;
+    document.getElementById('glm-radius').value = loc.radius_m;
+    document.getElementById('glm-active').value = loc.active ? '1' : '0';
+  } else {
+    ['glm-id','glm-name','glm-lat','glm-lng'].forEach(i => document.getElementById(i).value = '');
+    document.getElementById('glm-radius').value = '100';
+    document.getElementById('glm-active').value = '1';
+  }
+  document.getElementById('gps-loc-modal').style.display = 'flex';
+}
+function closeLocModal() { document.getElementById('gps-loc-modal').style.display = 'none'; }
+
+function getLocGPS() {
+  const msg = document.getElementById('glm-gps-msg');
+  msg.textContent = '取得中...';
+  if (!navigator.geolocation) { msg.textContent = '不支援 GPS'; return; }
   navigator.geolocation.getCurrentPosition(pos => {
-    document.getElementById('gps-lat').value = pos.coords.latitude.toFixed(6);
-    document.getElementById('gps-lng').value = pos.coords.longitude.toFixed(6);
+    document.getElementById('glm-lat').value = pos.coords.latitude.toFixed(6);
+    document.getElementById('glm-lng').value = pos.coords.longitude.toFixed(6);
     msg.style.color = 'var(--green)';
-    msg.textContent = '已取得目前位置，請確認後儲存';
+    msg.textContent = '已取得目前位置';
   }, err => {
     msg.style.color = 'var(--red)';
-    msg.textContent = '無法取得位置：' + err.message;
+    msg.textContent = '無法取得位置';
   }, { enableHighAccuracy: true, timeout: 10000 });
 }
-async function saveGpsSettings() {
-  const lat      = document.getElementById('gps-lat').value;
-  const lng      = document.getElementById('gps-lng').value;
-  const radius_m = parseInt(document.getElementById('gps-radius').value) || 100;
-  const location_name = document.getElementById('gps-loc-name').value.trim();
-  const gps_required  = document.getElementById('gps-required').value === '1';
-  const msg = document.getElementById('gps-save-msg');
+
+async function saveLocation() {
+  const id   = document.getElementById('glm-id').value;
+  const name = document.getElementById('glm-name').value.trim();
+  const lat  = document.getElementById('glm-lat').value;
+  const lng  = document.getElementById('glm-lng').value;
+  const radius_m = parseInt(document.getElementById('glm-radius').value) || 100;
+  const active   = document.getElementById('glm-active').value === '1';
+  if (!name)     { showToast('請填入地點名稱', 'error'); return; }
+  if (!lat||!lng){ showToast('請填入緯度和經度', 'error'); return; }
+  const body = { location_name: name, lat: parseFloat(lat), lng: parseFloat(lng), radius_m, active };
   try {
-    const res = await fetch('/api/punch/settings', {
-      method: 'PUT', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ lat: lat ? parseFloat(lat) : null,
-                             lng: lng ? parseFloat(lng) : null,
-                             radius_m, location_name, gps_required })
-    });
+    const url  = id ? `/api/punch/locations/${id}` : '/api/punch/locations';
+    const meth = id ? 'PUT' : 'POST';
+    const res  = await fetch(url, { method: meth, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     const data = await res.json();
-    if (data.error) { msg.style.color='var(--red)'; msg.textContent = data.error; return; }
-    msg.style.color = 'var(--green)';
-    msg.textContent = '設定已儲存' + (location_name ? `（${location_name}）` : '');
-    showToast('GPS 設定已儲存', 'success');
-  } catch(e) { msg.style.color='var(--red)'; msg.textContent='儲存失敗'; }
+    if (data.error) { showToast(data.error, 'error'); return; }
+    closeLocModal();
+    showToast(id ? '地點已更新' : '地點已新增', 'success');
+    // Refresh list
+    const listRes = await fetch('/api/punch/locations');
+    gpsLocList = await listRes.json();
+    renderLocList();
+  } catch(e) { showToast('儲存失敗', 'error'); }
+}
+
+async function deleteLocation(id) {
+  const loc = gpsLocList.find(x => x.id === id);
+  if (!confirm(`確定刪除地點「${loc ? loc.location_name : id}」？`)) return;
+  await fetch(`/api/punch/locations/${id}`, { method: 'DELETE' });
+  showToast('已刪除', 'success');
+  gpsLocList = gpsLocList.filter(x => x.id !== id);
+  renderLocList();
 }
 
 </script>

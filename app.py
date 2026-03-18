@@ -198,19 +198,26 @@ def init_db():
                 )
             """)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS punch_settings (
-                    id          INT PRIMARY KEY DEFAULT 1,
-                    lat         NUMERIC(10,6),
-                    lng         NUMERIC(10,6),
-                    radius_m    INT DEFAULT 100,
-                    location_name TEXT DEFAULT '',
-                    gps_required BOOLEAN DEFAULT FALSE,
-                    updated_at  TIMESTAMPTZ DEFAULT NOW()
+                CREATE TABLE IF NOT EXISTS punch_locations (
+                    id            SERIAL PRIMARY KEY,
+                    location_name TEXT NOT NULL DEFAULT '打卡地點',
+                    lat           NUMERIC(10,6) NOT NULL,
+                    lng           NUMERIC(10,6) NOT NULL,
+                    radius_m      INT DEFAULT 100,
+                    active        BOOLEAN DEFAULT TRUE,
+                    created_at    TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at    TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
-            # Ensure default settings row exists
             conn.execute("""
-                INSERT INTO punch_settings (id, gps_required)
+                CREATE TABLE IF NOT EXISTS punch_config (
+                    id           INT PRIMARY KEY DEFAULT 1,
+                    gps_required BOOLEAN DEFAULT FALSE,
+                    updated_at   TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                INSERT INTO punch_config (id, gps_required)
                 VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
             """)
@@ -228,6 +235,7 @@ def init_db():
         "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS latitude NUMERIC(10,6)",
         "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS longitude NUMERIC(10,6)",
         "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS gps_distance INT",
+        "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS location_name TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -1487,40 +1495,92 @@ def api_punch_me():
         return jsonify({'error': 'not logged in'}), 401
     return jsonify(dict(staff))
 
-# ── GPS settings (public read for punch page) ──────────────────────
+# ── GPS locations + config ─────────────────────────────────────────
+
+def loc_row(row):
+    if not row: return None
+    d = dict(row)
+    for f in ['lat','lng']: d[f] = float(d[f]) if d.get(f) is not None else None
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
+    return d
 
 @app.route('/api/punch/settings', methods=['GET'])
 def api_punch_settings_get():
+    """Return config + all active locations for punch page."""
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM punch_settings WHERE id=1").fetchone()
-    if not row:
-        return jsonify({'gps_required': False, 'radius_m': 100})
-    d = dict(row)
-    for f in ['lat','lng']:
-        if d.get(f) is not None: d[f] = float(d[f])
-    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
-    return jsonify(d)
+        cfg  = conn.execute("SELECT * FROM punch_config WHERE id=1").fetchone()
+        locs = conn.execute(
+            "SELECT * FROM punch_locations WHERE active=TRUE ORDER BY id"
+        ).fetchall()
+    result = {
+        'gps_required': cfg['gps_required'] if cfg else False,
+        'locations': [loc_row(r) for r in locs]
+    }
+    return jsonify(result)
 
-@app.route('/api/punch/settings', methods=['PUT'])
+@app.route('/api/punch/config', methods=['PUT'])
 @login_required
-def api_punch_settings_update():
+def api_punch_config_update():
     b = request.get_json(force=True)
-    lat          = float(b['lat'])          if b.get('lat')          else None
-    lng          = float(b['lng'])          if b.get('lng')          else None
-    radius_m     = int(b.get('radius_m') or 100)
-    location_name= b.get('location_name','').strip()
     gps_required = bool(b.get('gps_required', False))
     with get_db() as conn:
+        conn.execute(
+            "UPDATE punch_config SET gps_required=%s, updated_at=NOW() WHERE id=1",
+            (gps_required,)
+        )
+    return jsonify({'gps_required': gps_required})
+
+# Locations CRUD
+@app.route('/api/punch/locations', methods=['GET'])
+@login_required
+def api_punch_locations_list():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM punch_locations ORDER BY id").fetchall()
+    return jsonify([loc_row(r) for r in rows])
+
+@app.route('/api/punch/locations', methods=['POST'])
+@login_required
+def api_punch_locations_create():
+    b = request.get_json(force=True)
+    name = b.get('location_name','').strip() or '打卡地點'
+    try:
+        lat = float(b['lat']); lng = float(b['lng'])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'error': '請填入有效的緯度和經度'}), 400
+    radius_m = int(b.get('radius_m') or 100)
+    with get_db() as conn:
         row = conn.execute("""
-            UPDATE punch_settings
-            SET lat=%s, lng=%s, radius_m=%s, location_name=%s,
-                gps_required=%s, updated_at=NOW()
-            WHERE id=1 RETURNING *
-        """, (lat, lng, radius_m, location_name, gps_required)).fetchone()
-    d = dict(row)
-    for f in ['lat','lng']:
-        if d.get(f) is not None: d[f] = float(d[f])
-    return jsonify(d)
+            INSERT INTO punch_locations (location_name, lat, lng, radius_m)
+            VALUES (%s, %s, %s, %s) RETURNING *
+        """, (name, lat, lng, radius_m)).fetchone()
+    return jsonify(loc_row(row)), 201
+
+@app.route('/api/punch/locations/<int:lid>', methods=['PUT'])
+@login_required
+def api_punch_locations_update(lid):
+    b = request.get_json(force=True)
+    name = b.get('location_name','').strip() or '打卡地點'
+    try:
+        lat = float(b['lat']); lng = float(b['lng'])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({'error': '請填入有效的緯度和經度'}), 400
+    radius_m = int(b.get('radius_m') or 100)
+    active   = bool(b.get('active', True))
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE punch_locations
+            SET location_name=%s, lat=%s, lng=%s, radius_m=%s, active=%s, updated_at=NOW()
+            WHERE id=%s RETURNING *
+        """, (name, lat, lng, radius_m, active, lid)).fetchone()
+    return jsonify(loc_row(row)) if row else ('', 404)
+
+@app.route('/api/punch/locations/<int:lid>', methods=['DELETE'])
+@login_required
+def api_punch_locations_delete(lid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM punch_locations WHERE id=%s", (lid,))
+    return jsonify({'deleted': lid})
 
 # ── Clock in/out (requires punch session + GPS check) ─────────────
 
@@ -1545,26 +1605,37 @@ def api_punch_clock():
         if not staff:
             return jsonify({'error': '員工不存在'}), 404
 
-        settings = conn.execute("SELECT * FROM punch_settings WHERE id=1").fetchone()
+        cfg  = conn.execute("SELECT * FROM punch_config WHERE id=1").fetchone()
+        locs = conn.execute(
+            "SELECT * FROM punch_locations WHERE active=TRUE"
+        ).fetchall()
 
-    # GPS check
-    gps_distance = None
-    if settings and settings['gps_required']:
+    gps_required = cfg['gps_required'] if cfg else False
+
+    # GPS check — pass if within range of ANY active location
+    gps_distance  = None
+    matched_loc   = None
+    if lat is not None and lng is not None and locs:
+        for loc in locs:
+            d = _gps_distance(lat, lng, float(loc['lat']), float(loc['lng']))
+            if gps_distance is None or d < gps_distance:
+                gps_distance = d
+                matched_loc  = loc
+
+    if gps_required:
         if lat is None or lng is None:
             return jsonify({'error': '無法取得 GPS，請允許定位權限後重試'}), 403
-        if settings['lat'] is None:
-            return jsonify({'error': '管理員尚未設定打卡地點'}), 403
-        dist = _gps_distance(lat, lng, float(settings['lat']), float(settings['lng']))
-        gps_distance = dist
-        if dist > int(settings['radius_m']):
+        if not locs:
+            return jsonify({'error': '管理員尚未設定任何打卡地點'}), 403
+        if gps_distance is None or gps_distance > int(matched_loc['radius_m']):
+            nearest_name = matched_loc['location_name'] if matched_loc else '打卡地點'
+            nearest_dist = gps_distance or 0
+            nearest_r    = int(matched_loc['radius_m']) if matched_loc else 100
             return jsonify({
-                'error': f'您距離打卡地點 {dist} 公尺，超出允許範圍（{settings["radius_m"]} 公尺）',
-                'distance': dist,
-                'radius': settings['radius_m']
+                'error': f'距離最近地點「{nearest_name}」{nearest_dist} 公尺，超出允許範圍（{nearest_r} 公尺）',
+                'distance': nearest_dist,
+                'radius': nearest_r
             }), 403
-    elif lat is not None and lng is not None and settings and settings['lat']:
-        # GPS not required but record distance anyway
-        gps_distance = _gps_distance(lat, lng, float(settings['lat']), float(settings['lng']))
 
     # Prevent duplicate within 1 min
     with get_db() as conn:
@@ -1576,14 +1647,16 @@ def api_punch_clock():
         if recent:
             return jsonify({'error': '1 分鐘內已打過卡'}), 429
 
+        matched_name = matched_loc['location_name'] if matched_loc else ''
         row = conn.execute("""
             INSERT INTO punch_records
-              (staff_id, punch_type, latitude, longitude, gps_distance)
-            VALUES (%s, %s, %s, %s, %s) RETURNING *
+              (staff_id, punch_type, latitude, longitude, gps_distance, location_name)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
         """, (sid, punch_type,
               lat if lat is not None else None,
               lng if lng is not None else None,
-              gps_distance)).fetchone()
+              gps_distance,
+              matched_name)).fetchone()
 
     d = punch_record_row(row)
     d['staff_name']   = staff['name']
