@@ -286,16 +286,16 @@ async function loadLog(){
   const r=await fetch("/api/punch/today");
   const list=await r.json();
   const wrap=document.getElementById("today-log");
-  if(!list.length){wrap.innerHTML="<div class="log-empty">尚無打卡記錄</div>";return;}
+  if(!list.length){wrap.innerHTML='<div class="log-empty">尚無打卡記錄</div>';return;}
   wrap.innerHTML=list.map(r=>{
     const t=r.punched_at?r.punched_at.slice(11,16):"";
     const dist=r.gps_distance!=null?r.gps_distance+"m":"";
-    return "<div class="log-item">" +
-      "<span class="lb "+(LCLS[r.punch_type]||"")+"">"+(LABEL[r.punch_type]||r.punch_type)+"</span>" +
-      "<div><div class="log-time">"+t+"</div>" +
-      (dist?"<div class="log-sub">"+dist+"</div>":"") +
-      (r.is_manual?"<div class="log-sub">補打卡</div>":"") +
-      "</div></div>";
+    return '<div class="log-item">' +
+      '<span class="lb '+(LCLS[r.punch_type]||'')+'">'+(LABEL[r.punch_type]||r.punch_type)+'</span>' +
+      '<div><div class="log-time">'+t+'</div>' +
+      (dist?'<div class="log-sub">'+dist+'</div>':'') +
+      (r.is_manual?'<div class="log-sub">補打卡</div>':'') +
+      '</div></div>';
   }).join("");
 }
 
