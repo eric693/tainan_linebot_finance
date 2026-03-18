@@ -1,3 +1,5 @@
+import hashlib
+import math
 import os
 import secrets
 import threading
@@ -212,6 +214,21 @@ def init_db():
                 VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
             """)
+        # ── Schema migrations (safe: ADD COLUMN IF NOT EXISTS) ────────
+        migrations = [
+            # punch_staff: add username & password_hash if upgrading from old schema
+            "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS username TEXT",
+            "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS password_hash TEXT DEFAULT ''",
+            # punch_records: add GPS columns if upgrading
+            "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS latitude NUMERIC(10,6)",
+            "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS longitude NUMERIC(10,6)",
+            "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS gps_distance INT",
+        ]
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except Exception as me:
+                print(f"[MIGRATION SKIP] {sql[:60]}: {me}")
         print("[OK] Database initialised")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -1392,8 +1409,6 @@ def api_inv_profit():
 # ═══════════════════════════════════════════════════════════════════
 # Punch Clock API
 # ═══════════════════════════════════════════════════════════════════
-import hashlib, math
-
 def _hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
