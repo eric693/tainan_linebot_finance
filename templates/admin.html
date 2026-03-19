@@ -246,6 +246,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <a href="#" class="nav-item"        id="nav-ocr"     onclick="showPage('ocr',event)">AI 報帳辨識</a>
     <a href="#" class="nav-item"        id="nav-inv"     onclick="showPage('inv',event)">庫存管理</a>
     <a href="#" class="nav-item"        id="nav-punch"   onclick="showPage('punch',event)">打卡管理</a>
+    <a href="#" class="nav-item"        id="nav-sched"   onclick="showPage('sched',event)">排班管理</a>
   </nav>
   <div class="sidebar-bottom">
     <a href="/admin/logout" class="logout-btn">登出系統</a>
@@ -750,6 +751,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       <button class="inv-tab"        id="punchtab-manual"   onclick="switchPunchTab('manual')">補打卡</button>
       <button class="inv-tab"        id="punchtab-staff"    onclick="switchPunchTab('staff')">員工管理</button>
       <button class="inv-tab"        id="punchtab-gps"      onclick="switchPunchTab('gps')">GPS 設定</button>
+      <button class="inv-tab"        id="punchtab-line"     onclick="switchPunchTab('line')">LINE 打卡</button>
     </div>
 
     <!-- ── 出勤摘要 ── -->
@@ -758,7 +760,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
         <span class="filter-label">月份</span>
         <input class="filter-input" type="month" id="sum-month" onchange="loadPunchSummary()">
         <span style="flex:1"></span>
-        <a href="/punch" target="_blank" class="btn btn-primary btn-sm">開啟打卡頁</a>
+        <a href="/staff" target="_blank" class="btn btn-primary btn-sm">員工系統</a>
       </div>
       <div class="card">
         <div class="table-wrap">
@@ -911,12 +913,203 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       </div>
 
     </div>
+
+    <!-- ── LINE 打卡設定 ── -->
+    <div id="punch-panel-line" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start" id="line-punch-grid">
+
+        <!-- 左：設定 -->
+        <div class="card" style="padding:24px">
+          <div class="card-title" style="padding:0;margin-bottom:6px">LINE 官方帳號打卡設定</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:20px">員工透過 LINE 傳送位置訊息即可打卡</div>
+
+          <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px">
+            <label class="form-label" style="margin:0">啟用 LINE 打卡</label>
+            <select class="form-input" id="lp-enabled" style="width:auto">
+              <option value="0">停用</option>
+              <option value="1">啟用</option>
+            </select>
+          </div>
+
+          <div style="margin-bottom:14px">
+            <label class="form-label">Channel Access Token</label>
+            <input class="form-input" id="lp-token" placeholder="長效 Token（Messaging API）" style="width:100%;font-family:'DM Mono',monospace;font-size:12px">
+          </div>
+          <div style="margin-bottom:20px">
+            <label class="form-label">Channel Secret</label>
+            <input class="form-input" id="lp-secret" placeholder="Channel Secret" style="width:100%;font-family:'DM Mono',monospace;font-size:12px">
+          </div>
+
+          <button class="btn btn-primary" onclick="saveLinePunchConfig()" style="width:100%">儲存設定</button>
+          <div id="lp-save-msg" style="font-size:12px;color:var(--green);margin-top:10px;min-height:16px"></div>
+
+          <div style="margin-top:20px;padding:14px;background:var(--bg);border-radius:8px">
+            <div style="font-size:12px;font-weight:700;color:var(--navy);margin-bottom:8px">Webhook URL</div>
+            <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--accent);word-break:break-all;padding:8px;background:#fff;border-radius:6px;border:1px solid var(--border)" id="lp-webhook-url">載入中...</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:6px">複製此網址填入 LINE Developers → Messaging API → Webhook URL</div>
+          </div>
+        </div>
+
+        <!-- 右：說明 + 員工綁定 -->
+        <div>
+          <div class="card" style="padding:20px;margin-bottom:14px">
+            <div class="card-title" style="padding:0;margin-bottom:12px">設定步驟</div>
+            <div style="font-size:12px;color:var(--text);line-height:2.2;counter-reset:step">
+              <div style="display:flex;gap:8px;margin-bottom:6px"><span style="background:var(--navy);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">1</span><span>至 <a href="https://developers.line.biz" target="_blank" style="color:var(--accent)">LINE Developers</a> 建立 Messaging API Channel</span></div>
+              <div style="display:flex;gap:8px;margin-bottom:6px"><span style="background:var(--navy);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">2</span><span>複製 Channel Secret 和長效 Channel Access Token 填入左側</span></div>
+              <div style="display:flex;gap:8px;margin-bottom:6px"><span style="background:var(--navy);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">3</span><span>將左側 Webhook URL 填入 LINE Developers → Webhook URL，並開啟 Use Webhook</span></div>
+              <div style="display:flex;gap:8px;margin-bottom:6px"><span style="background:var(--navy);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">4</span><span>員工掃 QR Code 加入 LINE 官方帳號，輸入「綁定 帳號」完成綁定</span></div>
+              <div style="display:flex;gap:8px"><span style="background:var(--navy);color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">5</span><span>綁定後員工傳送位置訊息即自動打卡，GPS 驗證沿用打卡管理的地點設定</span></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">員工 LINE 綁定狀態</span>
+              <button class="btn btn-outline btn-sm" onclick="loadLinePunchStaff()">重新整理</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>姓名</th><th>帳號</th><th>LINE 綁定</th><th>操作</th></tr></thead>
+                <tbody id="lp-staff-tbody"><tr><td colspan="4" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
   </div><!-- end page-punch -->
+
+
+  <!-- ── 排班管理 ──────────────────────────── -->
+  <div class="page" id="page-sched" style="display:none">
+
+    <div class="inv-tab-bar">
+      <button class="inv-tab active" id="schedtab-calendar" onclick="switchSchedTab('calendar')">月曆總覽</button>
+      <button class="inv-tab"        id="schedtab-requests" onclick="switchSchedTab('requests')">排休申請</button>
+      <button class="inv-tab"        id="schedtab-summary"  onclick="switchSchedTab('summary')">人員摘要</button>
+      <button class="inv-tab"        id="schedtab-config"   onclick="switchSchedTab('config')">月份設定</button>
+    </div>
+
+    <!-- ── 月曆總覽 ── -->
+    <div id="sched-panel-calendar">
+      <div class="filter-bar" style="margin-bottom:20px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="sched-cal-month" onchange="loadSchedCalendar()">
+        <span style="flex:1"></span>
+        <a href="/staff" target="_blank" class="btn btn-outline btn-sm">員工系統</a>
+      </div>
+      <div id="sched-legend" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;font-size:12px">
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:var(--green-light);border:1px solid #a8dfc5;display:inline-block"></span>核准</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:var(--orange-light);border:1px solid #f5c0a0;display:inline-block"></span>待審</span>
+        <span style="display:flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:var(--red-light);border:1px solid #f5c0c0;display:inline-block"></span>超出上限</span>
+      </div>
+      <div id="sched-cal-wrap"></div>
+    </div>
+
+    <!-- ── 排休申請 ── -->
+    <div id="sched-panel-requests" style="display:none">
+      <div class="filter-bar" style="margin-bottom:20px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="sched-req-month" onchange="loadSchedRequests()">
+        <div class="filter-divider"></div>
+        <span class="filter-label">狀態</span>
+        <select class="filter-input" id="sched-req-status" onchange="loadSchedRequests()" style="min-width:120px">
+          <option value="">全部</option>
+          <option value="pending">審核中</option>
+          <option value="approved">已核准</option>
+          <option value="rejected">已退回</option>
+          <option value="modified_pending">修改待審</option>
+        </select>
+        <span style="flex:1"></span>
+        <span id="sched-req-count" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div id="sched-req-list"></div>
+    </div>
+
+    <!-- ── 人員摘要 ── -->
+    <div id="sched-panel-summary" style="display:none">
+      <div class="filter-bar" style="margin-bottom:20px;gap:12px">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="sched-sum-month" onchange="loadSchedSummary()">
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>員工</th><th>職稱</th><th>申請天數</th><th>配額</th><th>狀態</th><th>休假日期</th><th>操作</th></tr></thead>
+            <tbody id="sched-sum-tbody"><tr><td colspan="7" class="empty-state"><div class="empty-state-text">請選擇月份</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 月份設定 ── -->
+    <div id="sched-panel-config" style="display:none">
+      <div style="max-width:440px">
+        <div class="card" style="padding:24px">
+          <div class="card-title" style="padding:0;margin-bottom:18px">月份排班設定</div>
+          <div style="margin-bottom:14px">
+            <label class="form-label">設定月份</label>
+            <input class="filter-input" type="month" id="cfg-month" onchange="loadSchedConfig()" style="width:100%">
+          </div>
+          <div class="form-row">
+            <div>
+              <label class="form-label">每日最多休假人數</label>
+              <input class="form-input" type="number" id="cfg-max-off" min="1" max="20" value="2">
+              <div style="font-size:11px;color:var(--muted);margin-top:3px">同一天最多幾人可排休</div>
+            </div>
+            <div>
+              <label class="form-label">每人每月休假配額（天）</label>
+              <input class="form-input" type="number" id="cfg-quota" min="1" max="31" value="8">
+              <div style="font-size:11px;color:var(--muted);margin-top:3px">員工每月可申請幾天</div>
+            </div>
+          </div>
+          <div style="margin-bottom:18px">
+            <label class="form-label">備註</label>
+            <input class="form-input" id="cfg-notes" placeholder="例：本月五一連假注意事項" style="width:100%">
+          </div>
+          <button class="btn btn-primary" onclick="saveSchedConfig()" style="width:100%">儲存設定</button>
+          <div id="cfg-msg" style="font-size:12px;color:var(--green);margin-top:10px;min-height:16px"></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end page-sched -->
 
 </main>
 
 
 
+
+
+<!-- Schedule Review Modal -->
+<div class="modal-overlay" id="sched-review-modal" style="display:none">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <span class="modal-title" id="srm-title">審核排休申請</span>
+      <button class="modal-close" onclick="closeSchedReview()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="srm-id">
+      <div id="srm-info" style="margin-bottom:16px;padding:12px;background:var(--bg);border-radius:8px;font-size:13px"></div>
+      <div style="margin-bottom:12px">
+        <label class="form-label">審核人員</label>
+        <input class="form-input" id="srm-by" placeholder="管理員姓名" style="width:100%">
+      </div>
+      <div>
+        <label class="form-label">審核意見（選填）</label>
+        <input class="form-input" id="srm-note" placeholder="退回原因或備注" style="width:100%">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeSchedReview()">取消</button>
+      <button class="btn btn-danger" onclick="reviewRequest('reject')">退回</button>
+      <button class="btn btn-green" onclick="reviewRequest('approve')" style="background:var(--green);color:#fff">核准</button>
+    </div>
+  </div>
+</div>
 
 <!-- GPS Location Modal -->
 <div class="modal-overlay" id="gps-loc-modal" style="display:none">
@@ -1262,11 +1455,11 @@ function showPage(page, e) {
   closeSidebar();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
-  ['records','charts','summary','ocr','inv','punch'].forEach(p =>
+  ['records','charts','summary','ocr','inv','punch','sched'].forEach(p =>
     document.getElementById('page-' + p).style.display = p === page ? '' : 'none'
   );
   document.getElementById('page-title').textContent =
-    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理' }[page];
+    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理', sched: '排班管理' }[page];
   document.getElementById('new-btn').style.display = page === 'records' ? '' : 'none';
   if (page === 'records') loadRecords();
   if (page === 'charts')  { initChartDefaults(); renderCharts(); }
@@ -1274,6 +1467,7 @@ function showPage(page, e) {
   if (page === 'ocr')     initOcr();
   if (page === 'inv')     initInv();
   if (page === 'punch')   initPunch();
+  if (page === 'sched')   initSched();
 }
 
 // ── Data ──────────────────────────────────────────────────────
@@ -2571,7 +2765,7 @@ function initPunch() {
 }
 
 function switchPunchTab(tab) {
-  ['summary','records','manual','staff','gps'].forEach(t => {
+  ['summary','records','manual','staff','gps','line'].forEach(t => {
     document.getElementById('punchtab-' + t).classList.toggle('active', t === tab);
     document.getElementById('punch-panel-' + t).style.display = t === tab ? '' : 'none';
   });
@@ -2580,6 +2774,7 @@ function switchPunchTab(tab) {
   if (tab === 'manual')  { loadManualStaffOptions(); loadManualRecords(); }
   if (tab === 'staff')   loadPunchStaff();
   if (tab === 'gps')     loadGpsSettings();
+  if (tab === 'line')    loadLinePunchConfig();
 }
 
 // ── 出勤摘要 ──────────────────────────────────────────────────
@@ -3196,6 +3391,311 @@ async function deleteLocation(id) {
   showToast('已刪除', 'success');
   gpsLocList = gpsLocList.filter(x => x.id !== id);
   renderLocList();
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 排班管理模組
+// ═══════════════════════════════════════════════════════════════
+const SCHED_STATUS_LABEL = {
+  pending:'審核中', approved:'已核准', rejected:'已退回',
+  modified_pending:'修改待審', not_submitted:'未申請'
+};
+const SCHED_STATUS_COLOR = {
+  pending:'var(--orange)', approved:'var(--green)',
+  rejected:'var(--red)', modified_pending:'var(--accent)', not_submitted:'var(--muted)'
+};
+const WEEKDAY_ZH = ['日','一','二','三','四','五','六'];
+let schedReviewId = null;
+let schedCurMonth = null;
+
+function initSched() {
+  const now = new Date();
+  const ym  = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  ['sched-cal-month','sched-req-month','sched-sum-month','cfg-month'].forEach(id => {
+    if (!document.getElementById(id).value)
+      document.getElementById(id).value = ym;
+  });
+  switchSchedTab('calendar');
+}
+
+function switchSchedTab(tab) {
+  ['calendar','requests','summary','config'].forEach(t => {
+    document.getElementById('schedtab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('sched-panel-' + t).style.display = t === tab ? '' : 'none';
+  });
+  if (tab === 'calendar') loadSchedCalendar();
+  if (tab === 'requests') loadSchedRequests();
+  if (tab === 'summary')  loadSchedSummary();
+  if (tab === 'config')   loadSchedConfig();
+}
+
+// ── 月曆總覽 ──────────────────────────────────────────────────
+async function loadSchedCalendar() {
+  const month = document.getElementById('sched-cal-month').value;
+  if (!month) return;
+  schedCurMonth = month;
+  const res  = await fetch(`/api/schedule/admin/calendar/${month}`);
+  const data = await res.json();
+  renderSchedCalendar(data);
+}
+
+function renderSchedCalendar(data) {
+  const wrap = document.getElementById('sched-cal-wrap');
+  const { days, config, staff_count } = data;
+  if (!days || !days.length) { wrap.innerHTML = ''; return; }
+
+  // Build a 7-col grid calendar
+  const firstWd = new Date(days[0].date + 'T00:00:00').getDay();
+  const maxOff  = config.max_off_per_day || 2;
+
+  let html = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:8px">`;
+  ['日','一','二','三','四','五','六'].forEach((d,i) => {
+    html += `<div style="text-align:center;font-size:11px;font-weight:700;color:${i===0?'var(--red)':i===6?'var(--accent)':'var(--muted)'};padding:6px 0">${d}</div>`;
+  });
+  html += '</div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">';
+
+  for (let i = 0; i < firstWd; i++) html += '<div></div>';
+
+  days.forEach(d => {
+    const dt    = new Date(d.date + 'T00:00:00');
+    const wd    = dt.getDay();
+    const isOver = d.over_limit;
+    const hasPending = d.off_list.some(x => x.status !== 'approved');
+    let bg = '#fff', border = 'var(--border)';
+    if (isOver) { bg = 'var(--red-light)'; border = '#f5c0c0'; }
+    else if (hasPending) { bg = 'var(--orange-light)'; border = '#f5c0a0'; }
+
+    const nameList = d.off_list.length
+      ? `<div style="font-size:9px;color:var(--text);margin-top:3px;line-height:1.5">${
+          d.off_list.map(x => `<span style="color:${x.status==='approved'?'var(--green)':'var(--orange)'}">${escHtml(x.name)}</span>`).join('<br>')
+        }</div>` : '';
+
+    html += `<div style="border:1.5px solid ${border};border-radius:8px;padding:6px 5px;background:${bg};min-height:64px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-family:'DM Mono',monospace;font-size:14px;font-weight:600;color:${wd===0?'var(--red)':wd===6?'var(--accent)':'var(--navy)'}">${d.day}</span>
+        ${d.off_count > 0 ? `<span style="font-size:10px;font-weight:700;color:${isOver?'var(--red)':'var(--muted)'}">休${d.off_count}/${maxOff}</span>` : ''}
+      </div>
+      ${nameList}
+    </div>`;
+  });
+  html += '</div>';
+  wrap.innerHTML = html;
+}
+
+// ── 排休申請 ──────────────────────────────────────────────────
+async function loadSchedRequests() {
+  const month  = document.getElementById('sched-req-month').value;
+  const status = document.getElementById('sched-req-status').value;
+  let url = '/api/schedule/admin/requests?';
+  if (month)  url += `month=${month}&`;
+  if (status) url += `status=${status}&`;
+  const res  = await fetch(url);
+  const list = await res.json();
+  document.getElementById('sched-req-count').textContent = `共 ${list.length} 筆`;
+  renderSchedRequests(list);
+}
+
+function renderSchedRequests(list) {
+  const wrap = document.getElementById('sched-req-list');
+  if (!list.length) {
+    wrap.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--muted)">無符合申請</div>';
+    return;
+  }
+  wrap.innerHTML = list.map(r => {
+    const statusColor = SCHED_STATUS_COLOR[r.status] || 'var(--muted)';
+    const statusLabel = SCHED_STATUS_LABEL[r.status] || r.status;
+    const datesStr = (r.dates || []).map(d => {
+      const dt = new Date(d + 'T00:00:00');
+      return `${d.slice(5)}(${WEEKDAY_ZH[dt.getDay()]})`;
+    }).join('　');
+    const canReview = ['pending','modified_pending'].includes(r.status);
+    const submittedAt = r.created_at ? r.created_at.slice(0,10) : '';
+    return `<div class="card" style="margin-bottom:12px">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+        <div>
+          <span class="card-title">${escHtml(r.staff_name||'')}</span>
+          ${r.staff_role ? `<span style="font-size:12px;color:var(--muted);margin-left:8px">${escHtml(r.staff_role)}</span>` : ''}
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${r.month} ｜ 申請 ${(r.dates||[]).length} 天 ｜ ${submittedAt}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:700;color:${statusColor}">${statusLabel}</span>
+          ${canReview ? `<button class="btn btn-primary btn-sm" onclick="openSchedReview(${r.id},'${escHtml(r.staff_name||'')}','${r.month}',${JSON.stringify(r.dates||[])})">審核</button>` : ''}
+          <button class="btn btn-danger btn-sm" onclick="deleteSchedRequest(${r.id})">刪除</button>
+        </div>
+      </div>
+      <div style="padding:10px 20px;background:var(--bg);font-size:12px;color:var(--text)">
+        ${datesStr || '（無日期）'}
+        ${r.submit_note ? `<div style="color:var(--muted);margin-top:4px">員工備註：${escHtml(r.submit_note)}</div>` : ''}
+        ${r.review_note ? `<div style="color:${statusColor};margin-top:4px">審核意見：${escHtml(r.review_note)}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openSchedReview(id, name, month, dates) {
+  schedReviewId = id;
+  document.getElementById('srm-title').textContent = `審核 ${name} 的排休申請`;
+  document.getElementById('srm-id').value = id;
+  document.getElementById('srm-by').value = '';
+  document.getElementById('srm-note').value = '';
+  const datesStr = dates.map(d => {
+    const dt = new Date(d + 'T00:00:00');
+    return `${d.slice(5)}（週${WEEKDAY_ZH[dt.getDay()]}）`;
+  }).join('、');
+  document.getElementById('srm-info').innerHTML =
+    `<strong>${name}</strong>｜${month}｜共 ${dates.length} 天<br><div style="margin-top:6px;color:var(--muted)">${datesStr}</div>`;
+  document.getElementById('sched-review-modal').style.display = 'flex';
+}
+function closeSchedReview() { document.getElementById('sched-review-modal').style.display = 'none'; }
+
+async function reviewRequest(action) {
+  const id   = document.getElementById('srm-id').value;
+  const by   = document.getElementById('srm-by').value.trim();
+  const note = document.getElementById('srm-note').value.trim();
+  if (!by) { showToast('請填寫審核人員姓名', 'error'); return; }
+  const res  = await fetch(`/api/schedule/admin/requests/${id}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ action, reviewed_by: by, review_note: note })
+  });
+  const data = await res.json();
+  if (data.error) { showToast(data.error, 'error'); return; }
+  closeSchedReview();
+  showToast(action === 'approve' ? '已核准' : '已退回', 'success');
+  await loadSchedRequests();
+}
+
+async function deleteSchedRequest(id) {
+  if (!confirm('確定刪除此申請記錄？')) return;
+  await fetch(`/api/schedule/admin/requests/${id}`, { method: 'DELETE' });
+  showToast('已刪除', 'success');
+  await loadSchedRequests();
+}
+
+// ── 人員摘要 ──────────────────────────────────────────────────
+async function loadSchedSummary() {
+  const month = document.getElementById('sched-sum-month').value;
+  if (!month) return;
+  const res  = await fetch(`/api/schedule/admin/summary/${month}`);
+  const data = await res.json();
+  const tb   = document.getElementById('sched-sum-tbody');
+  const { staff, config } = data;
+  if (!staff || !staff.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="empty-state-text">無員工資料</div></td></tr>';
+    return;
+  }
+  tb.innerHTML = staff.map(s => {
+    const statusColor = SCHED_STATUS_COLOR[s.status] || 'var(--muted)';
+    const statusLabel = SCHED_STATUS_LABEL[s.status] || s.status;
+    const datesStr = (s.dates || []).map(d => {
+      const dt = new Date(d + 'T00:00:00');
+      return `${d.slice(5)}(${WEEKDAY_ZH[dt.getDay()]})`;
+    }).join(' ');
+    const overQuota = s.days_off > s.quota;
+    return `<tr>
+      <td style="font-weight:600">${escHtml(s.name)}</td>
+      <td style="color:var(--muted)">${escHtml(s.role||'')}</td>
+      <td style="font-family:'DM Mono',monospace;text-align:center;font-weight:700;color:${overQuota?'var(--red)':'var(--navy)'}">${s.days_off}</td>
+      <td style="font-family:'DM Mono',monospace;text-align:center;color:var(--muted)">${s.quota}</td>
+      <td><span style="font-size:12px;font-weight:700;color:${statusColor}">${statusLabel}</span></td>
+      <td style="font-size:12px;color:var(--muted)">${datesStr||'—'}</td>
+      <td>${s.request_id && ['pending','modified_pending'].includes(s.status)
+        ? `<button class="btn btn-primary btn-sm" onclick="switchSchedTab('requests');document.getElementById('sched-req-month').value='${month}';loadSchedRequests()">審核</button>` : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── 月份設定 ──────────────────────────────────────────────────
+async function loadSchedConfig() {
+  const month = document.getElementById('cfg-month').value;
+  if (!month) return;
+  const res = await fetch(`/api/schedule/admin/config/${month}`);
+  const d   = await res.json();
+  document.getElementById('cfg-max-off').value = d.max_off_per_day || 2;
+  document.getElementById('cfg-quota').value   = d.vacation_quota  || 8;
+  document.getElementById('cfg-notes').value   = d.notes || '';
+  document.getElementById('cfg-msg').textContent = '';
+}
+
+async function saveSchedConfig() {
+  const month   = document.getElementById('cfg-month').value;
+  const max_off = parseInt(document.getElementById('cfg-max-off').value) || 2;
+  const quota   = parseInt(document.getElementById('cfg-quota').value)   || 8;
+  const notes   = document.getElementById('cfg-notes').value.trim();
+  if (!month) { showToast('請選擇月份', 'error'); return; }
+  const res  = await fetch(`/api/schedule/admin/config/${month}`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ max_off_per_day: max_off, vacation_quota: quota, notes })
+  });
+  const data = await res.json();
+  if (data.error) { showToast(data.error, 'error'); return; }
+  document.getElementById('cfg-msg').textContent = `${month} 設定已儲存（每日最多 ${max_off} 人休假，配額 ${quota} 天/人）`;
+  showToast('設定已儲存', 'success');
+}
+
+
+// ── LINE 打卡設定 ──────────────────────────────────────────────
+async function loadLinePunchConfig() {
+  const res = await fetch('/api/line-punch/config');
+  const d   = await res.json();
+  document.getElementById('lp-enabled').value = d.enabled ? '1' : '0';
+  document.getElementById('lp-token').value   = '';   // never pre-fill token
+  document.getElementById('lp-secret').value  = '';
+  document.getElementById('lp-save-msg').textContent =
+    d.enabled ? '目前狀態：已啟用' : '目前狀態：未啟用';
+  // Webhook URL
+  const host = window.location.origin;
+  document.getElementById('lp-webhook-url').textContent = host + '/line-punch/webhook';
+  await loadLinePunchStaff();
+}
+
+async function saveLinePunchConfig() {
+  const token   = document.getElementById('lp-token').value.trim();
+  const secret  = document.getElementById('lp-secret').value.trim();
+  const enabled = document.getElementById('lp-enabled').value === '1';
+  const msg     = document.getElementById('lp-save-msg');
+  if (enabled && (!token || !secret)) {
+    showToast('啟用時必須填寫 Token 和 Secret', 'error'); return;
+  }
+  const body = { enabled };
+  if (token)  body.channel_access_token = token;
+  if (secret) body.channel_secret = secret;
+  try {
+    const res  = await fetch('/api/line-punch/config', {
+      method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.error) { showToast(data.error, 'error'); return; }
+    msg.style.color = 'var(--green)';
+    msg.textContent = '設定已儲存' + (enabled ? '（已啟用）' : '（已停用）');
+    showToast('LINE 打卡設定已儲存', 'success');
+  } catch(e) { showToast('儲存失敗', 'error'); }
+}
+
+async function loadLinePunchStaff() {
+  const res  = await fetch('/api/line-punch/staff');
+  const list = await res.json();
+  const tb   = document.getElementById('lp-staff-tbody');
+  if (!list.length) {
+    tb.innerHTML = '<tr><td colspan="4" class="empty-state"><div class="empty-state-text">尚無員工</div></td></tr>';
+    return;
+  }
+  tb.innerHTML = list.map(s => `<tr>
+    <td style="font-weight:600">${escHtml(s.name)}</td>
+    <td style="font-family:'DM Mono',monospace;font-size:12px;color:var(--muted)">${escHtml(s.username||'')}</td>
+    <td>${s.line_bound
+      ? '<span class="badge badge-ok">已綁定</span>'
+      : '<span class="badge badge-warn">未綁定</span>'}</td>
+    <td>${s.line_bound
+      ? `<button class="btn btn-danger btn-sm" onclick="unbindLinePunch(${s.id},'${escHtml(s.name)}')">解除綁定</button>` : ''}</td>
+  </tr>`).join('');
+}
+
+async function unbindLinePunch(id, name) {
+  if (!confirm(`確定解除「${name}」的 LINE 綁定？`)) return;
+  await fetch(`/api/line-punch/staff/${id}/unbind`, { method: 'POST' });
+  showToast('已解除綁定', 'success');
+  await loadLinePunchStaff();
 }
 
 </script>

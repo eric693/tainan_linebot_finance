@@ -19,7 +19,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
     MessageEvent, TextMessage, TextSendMessage,
-    PostbackEvent, FlexSendMessage
+    PostbackEvent, FlexSendMessage, LocationMessage
 )
 
 app = Flask(__name__)
@@ -221,6 +221,46 @@ def init_db():
                 VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS line_punch_config (
+                    id                  INT PRIMARY KEY DEFAULT 1,
+                    channel_access_token TEXT DEFAULT '',
+                    channel_secret       TEXT DEFAULT '',
+                    enabled              BOOLEAN DEFAULT FALSE,
+                    updated_at           TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                INSERT INTO line_punch_config (id)
+                VALUES (1)
+                ON CONFLICT (id) DO NOTHING
+            """)
+            # ── Scheduling tables ─────────────────────────────────────────
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schedule_config (
+                    month           TEXT PRIMARY KEY,
+                    max_off_per_day INT DEFAULT 2,
+                    vacation_quota  INT DEFAULT 8,
+                    notes           TEXT DEFAULT '',
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS schedule_requests (
+                    id           SERIAL PRIMARY KEY,
+                    staff_id     INT REFERENCES punch_staff(id) ON DELETE CASCADE,
+                    month        TEXT NOT NULL,
+                    dates        JSONB NOT NULL DEFAULT '[]',
+                    status       TEXT DEFAULT 'pending',
+                    submit_note  TEXT DEFAULT '',
+                    reviewed_by  TEXT DEFAULT '',
+                    reviewed_at  TIMESTAMPTZ,
+                    review_note  TEXT DEFAULT '',
+                    created_at   TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at   TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(staff_id, month)
+                )
+            """)
         print("[OK] Database tables created")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -236,6 +276,8 @@ def init_db():
         "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS longitude NUMERIC(10,6)",
         "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS gps_distance INT",
         "ALTER TABLE punch_records ADD COLUMN IF NOT EXISTS location_name TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS line_user_id TEXT",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS bind_code TEXT",
     ]
     for sql in migrations:
         try:
@@ -1453,8 +1495,13 @@ def punch_record_row(row):
 # ── Employee punch session (separate from admin session) ───────────
 
 @app.route('/punch')
+@app.route('/staff')
 def punch_page():
-    return render_template('punch.html')
+    return render_template('staff.html')
+
+@app.route('/schedule')
+def schedule_page_redirect():
+    return render_template('staff.html')
 
 @app.route('/api/punch/login', methods=['POST'])
 def api_punch_login():
@@ -1854,6 +1901,677 @@ def api_punch_summary():
         result.append(d)
     return jsonify(result)
 
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Schedule API
+# ═══════════════════════════════════════════════════════════════════
+import json as _json
+from datetime import datetime as _dt, timedelta as _td
+
+WEEKDAY_ZH = ['一','二','三','四','五','六','日']
+
+def sched_req_row(row):
+    if not row: return None
+    d = dict(row)
+    if isinstance(d.get('dates'), str):
+        try: d['dates'] = _json.loads(d['dates'])
+        except: d['dates'] = []
+    if d.get('reviewed_at'): d['reviewed_at'] = d['reviewed_at'].isoformat()
+    if d.get('created_at'):  d['created_at']  = d['created_at'].isoformat()
+    if d.get('updated_at'):  d['updated_at']  = d['updated_at'].isoformat()
+    return d
+
+def get_schedule_config(conn, month):
+    row = conn.execute(
+        "SELECT * FROM schedule_config WHERE month=%s", (month,)
+    ).fetchone()
+    if not row:
+        return {'month': month, 'max_off_per_day': 2, 'vacation_quota': 8, 'notes': ''}
+    return dict(row)
+
+def get_off_counts(conn, month):
+    """Return {date_str: count} of approved off days in a month."""
+    rows = conn.execute("""
+        SELECT unnest(dates::text[]) as d, COUNT(*) as cnt
+        FROM schedule_requests
+        WHERE month=%s AND status IN ('approved','pending')
+        GROUP BY d
+    """, (month,)).fetchall()
+    # Use jsonb approach instead
+    rows2 = conn.execute("""
+        SELECT elem as d, COUNT(*) as cnt
+        FROM schedule_requests,
+             jsonb_array_elements_text(dates) as elem
+        WHERE month=%s AND status IN ('approved','pending')
+        GROUP BY elem
+    """, (month,)).fetchall()
+    return {r['d']: int(r['cnt']) for r in rows2}
+
+# ── Employee-facing (punch session) ───────────────────────────────
+
+
+
+@app.route('/api/schedule/config/<month>', methods=['GET'])
+def api_sched_config_get(month):
+    """Public: get month config + off-count map."""
+    with get_db() as conn:
+        cfg    = get_schedule_config(conn, month)
+        counts = get_off_counts(conn, month)
+    return jsonify({**cfg, 'off_counts': counts})
+
+@app.route('/api/schedule/my-request/<month>', methods=['GET'])
+def api_sched_my_request(month):
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT sr.*, ps.name as staff_name FROM schedule_requests sr "
+            "JOIN punch_staff ps ON ps.id=sr.staff_id "
+            "WHERE sr.staff_id=%s AND sr.month=%s",
+            (sid, month)
+        ).fetchone()
+    return jsonify(sched_req_row(row)) if row else jsonify(None)
+
+@app.route('/api/schedule/my-request', methods=['POST'])
+def api_sched_submit():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    b     = request.get_json(force=True)
+    month = b.get('month','').strip()
+    dates = b.get('dates', [])
+    note  = b.get('submit_note','').strip()
+
+    if not month: return jsonify({'error': '請選擇月份'}), 400
+    if not isinstance(dates, list):
+        return jsonify({'error': '日期格式錯誤'}), 400
+
+    # Validate all dates belong to the month
+    for d in dates:
+        if not d.startswith(month):
+            return jsonify({'error': f'日期 {d} 不屬於 {month}'}), 400
+
+    with get_db() as conn:
+        cfg    = get_schedule_config(conn, month)
+        counts = get_off_counts(conn, month)
+
+        # Check quota
+        if len(dates) > cfg['vacation_quota']:
+            return jsonify({
+                'error': f'申請天數（{len(dates)}天）超過本月配額（{cfg["vacation_quota"]}天）'
+            }), 422
+
+        # Check per-day max (exclude self)
+        existing = conn.execute(
+            "SELECT dates FROM schedule_requests WHERE staff_id=%s AND month=%s",
+            (sid, month)
+        ).fetchone()
+        my_old_dates = set()
+        if existing:
+            old = existing['dates']
+            if isinstance(old, str):
+                try: old = _json.loads(old)
+                except: old = []
+            my_old_dates = set(old)
+
+        # Recalc counts without self
+        overcrowded = []
+        for d in dates:
+            # Count others on this day
+            others = conn.execute("""
+                SELECT COUNT(*) as cnt
+                FROM schedule_requests,
+                     jsonb_array_elements_text(dates) as elem
+                WHERE month=%s AND status IN ('approved','pending')
+                  AND staff_id != %s AND elem=%s
+            """, (month, sid, d)).fetchone()
+            others_count = int(others['cnt']) if others else 0
+            if others_count >= cfg['max_off_per_day']:
+                dt = _dt.strptime(d, '%Y-%m-%d')
+                weekday = WEEKDAY_ZH[dt.weekday()]
+                overcrowded.append({'date': d, 'weekday': weekday,
+                                   'count': others_count, 'max': cfg['max_off_per_day']})
+        if overcrowded:
+            msgs = [f"{x['date']}（{x['weekday']}）已有 {x['count']} 人排休" for x in overcrowded]
+            err_msg = '以下日期休假人數已達上限：' + '、'.join(msgs)
+            return jsonify({'error': err_msg, 'overcrowded': overcrowded}), 422
+
+        # Upsert — if approved, go back to modified_pending
+        prev = conn.execute(
+            "SELECT status FROM schedule_requests WHERE staff_id=%s AND month=%s",
+            (sid, month)
+        ).fetchone()
+        new_status = 'modified_pending' if prev and prev['status']=='approved' else 'pending'
+        dates_json = _json.dumps(dates, ensure_ascii=False)
+
+        row = conn.execute("""
+            INSERT INTO schedule_requests
+              (staff_id, month, dates, status, submit_note, updated_at)
+            VALUES (%s, %s, %s::jsonb, %s, %s, NOW())
+            ON CONFLICT (staff_id, month) DO UPDATE
+              SET dates=%s::jsonb, status=%s, submit_note=%s, updated_at=NOW()
+            RETURNING *
+        """, (sid, month, dates_json, new_status, note,
+              dates_json, new_status, note)).fetchone()
+
+    d_objs = []
+    for ds in dates:
+        dt = _dt.strptime(ds, '%Y-%m-%d')
+        d_objs.append({'date': ds, 'weekday': WEEKDAY_ZH[dt.weekday()],
+                       'day': dt.day})
+    resp = sched_req_row(row)
+    resp['date_details'] = d_objs
+    return jsonify(resp), 201
+
+# ── Admin schedule API ─────────────────────────────────────────────
+
+@app.route('/api/schedule/admin/config/<month>', methods=['GET'])
+@login_required
+def api_sched_admin_config_get(month):
+    with get_db() as conn:
+        cfg    = get_schedule_config(conn, month)
+        counts = get_off_counts(conn, month)
+    return jsonify({**cfg, 'off_counts': counts})
+
+@app.route('/api/schedule/admin/config/<month>', methods=['PUT'])
+@login_required
+def api_sched_admin_config_put(month):
+    b = request.get_json(force=True)
+    max_off   = int(b.get('max_off_per_day') or 2)
+    quota     = int(b.get('vacation_quota') or 8)
+    notes     = b.get('notes','').strip()
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO schedule_config (month, max_off_per_day, vacation_quota, notes)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (month) DO UPDATE
+              SET max_off_per_day=%s, vacation_quota=%s, notes=%s, updated_at=NOW()
+        """, (month, max_off, quota, notes, max_off, quota, notes))
+    return jsonify({'month': month, 'max_off_per_day': max_off,
+                    'vacation_quota': quota, 'notes': notes})
+
+@app.route('/api/schedule/admin/requests', methods=['GET'])
+@login_required
+def api_sched_admin_requests():
+    month  = request.args.get('month','')
+    status = request.args.get('status','')
+    conds, params = ['TRUE'], []
+    if month:  conds.append('sr.month=%s');  params.append(month)
+    if status: conds.append('sr.status=%s'); params.append(status)
+    where = ' AND '.join(conds)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT sr.*, ps.name as staff_name, ps.role as staff_role
+            FROM schedule_requests sr
+            JOIN punch_staff ps ON ps.id=sr.staff_id
+            WHERE {where}
+            ORDER BY sr.month DESC, ps.name
+        """, params).fetchall()
+    return jsonify([sched_req_row(r) for r in rows])
+
+@app.route('/api/schedule/admin/requests/<int:rid>', methods=['PUT'])
+@login_required
+def api_sched_admin_review(rid):
+    b           = request.get_json(force=True)
+    action      = b.get('action')       # 'approve' | 'reject'
+    reviewed_by = b.get('reviewed_by','').strip()
+    review_note = b.get('review_note','').strip()
+    if action not in ('approve','reject'):
+        return jsonify({'error': 'action must be approve or reject'}), 400
+    new_status = 'approved' if action == 'approve' else 'rejected'
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE schedule_requests
+            SET status=%s, reviewed_by=%s, review_note=%s,
+                reviewed_at=NOW(), updated_at=NOW()
+            WHERE id=%s RETURNING *
+        """, (new_status, reviewed_by, review_note, rid)).fetchone()
+    return jsonify(sched_req_row(row)) if row else ('', 404)
+
+@app.route('/api/schedule/admin/requests/<int:rid>', methods=['DELETE'])
+@login_required
+def api_sched_admin_delete(rid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM schedule_requests WHERE id=%s", (rid,))
+    return jsonify({'deleted': rid})
+
+@app.route('/api/schedule/admin/calendar/<month>', methods=['GET'])
+@login_required
+def api_sched_admin_calendar(month):
+    """Return per-day breakdown: who is off, how many working."""
+    with get_db() as conn:
+        cfg   = get_schedule_config(conn, month)
+        # All staff
+        staff = conn.execute(
+            "SELECT id, name, role FROM punch_staff WHERE active=TRUE ORDER BY name"
+        ).fetchall()
+        # All requests for this month
+        reqs  = conn.execute("""
+            SELECT sr.staff_id, sr.dates, sr.status, ps.name
+            FROM schedule_requests sr
+            JOIN punch_staff ps ON ps.id=sr.staff_id
+            WHERE sr.month=%s AND sr.status IN ('approved','pending','modified_pending')
+        """, (month,)).fetchall()
+
+    # Build calendar
+    year_int, month_int = int(month[:4]), int(month[5:])
+    import calendar as _cal
+    days_in_month = _cal.monthrange(year_int, month_int)[1]
+
+    # Map staff_id → off dates
+    staff_off = {}  # staff_id → {date: status}
+    for r in reqs:
+        dates_val = r['dates']
+        if isinstance(dates_val, str):
+            try: dates_val = _json.loads(dates_val)
+            except: dates_val = []
+        for d in (dates_val or []):
+            if r['staff_id'] not in staff_off:
+                staff_off[r['staff_id']] = {}
+            staff_off[r['staff_id']][d] = r['status']
+
+    days = []
+    for day in range(1, days_in_month+1):
+        date_str = f"{month}-{str(day).padStart(2,'0')}" if False else f"{month}-{day:02d}"
+        dt = _dt(year_int, month_int, day)
+        off_list = []
+        for s in staff:
+            st = staff_off.get(s['id'], {}).get(date_str)
+            if st:
+                off_list.append({'staff_id': s['id'], 'name': s['name'],
+                                 'role': s['role'], 'status': st})
+        days.append({
+            'date': date_str,
+            'day': day,
+            'weekday': WEEKDAY_ZH[dt.weekday()],
+            'is_weekend': dt.weekday() >= 5,
+            'off_count': len(off_list),
+            'off_list': off_list,
+            'working_count': len(staff) - len(off_list),
+            'over_limit': len(off_list) > cfg['max_off_per_day']
+        })
+
+    return jsonify({
+        'month': month,
+        'config': cfg,
+        'staff_count': len(staff),
+        'days': days
+    })
+
+@app.route('/api/schedule/admin/summary/<month>', methods=['GET'])
+@login_required
+def api_sched_admin_summary(month):
+    """Per-staff summary for the month."""
+    with get_db() as conn:
+        cfg   = get_schedule_config(conn, month)
+        staff = conn.execute(
+            "SELECT id, name, role FROM punch_staff WHERE active=TRUE ORDER BY name"
+        ).fetchall()
+        reqs  = conn.execute("""
+            SELECT sr.*
+            FROM schedule_requests sr
+            WHERE sr.month=%s
+        """, (month,)).fetchall()
+
+    req_map = {r['staff_id']: sched_req_row(r) for r in reqs}
+    result  = []
+    for s in staff:
+        req = req_map.get(s['id'])
+        result.append({
+            'staff_id':   s['id'],
+            'name':       s['name'],
+            'role':       s['role'],
+            'status':     req['status']  if req else 'not_submitted',
+            'days_off':   len(req['dates']) if req else 0,
+            'quota':      cfg['vacation_quota'],
+            'dates':      req['dates']   if req else [],
+            'request_id': req['id']      if req else None,
+        })
+    return jsonify({'config': cfg, 'staff': result})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LINE Punch Clock — Webhook + Admin API
+# ═══════════════════════════════════════════════════════════════════
+
+def get_line_punch_config():
+    """Return LINE punch config dict."""
+    if not DATABASE_URL:
+        return None
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT * FROM line_punch_config WHERE id=1").fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+def _line_punch_api():
+    """Return a LineBotApi instance for punch channel, or None."""
+    cfg = get_line_punch_config()
+    if not cfg or not cfg.get('enabled') or not cfg.get('channel_access_token'):
+        return None
+    return LineBotApi(cfg['channel_access_token'])
+
+def _send_line_punch(user_id, text):
+    """Send a text reply to a LINE user via punch channel."""
+    api = _line_punch_api()
+    if not api:
+        return
+    try:
+        api.push_message(user_id, TextSendMessage(text=text))
+    except Exception as e:
+        print(f"[LINE PUNCH] push_message error: {e}")
+
+# ── Webhook ────────────────────────────────────────────────────────
+
+@app.route('/line-punch/webhook', methods=['POST'])
+def line_punch_webhook():
+    cfg = get_line_punch_config()
+    if not cfg or not cfg.get('enabled') or not cfg.get('channel_secret'):
+        return 'disabled', 200
+
+    signature = request.headers.get('X-Line-Signature', '')
+    body      = request.get_data(as_text=True)
+
+    # Verify signature
+    import hmac, hashlib as _hl, base64 as _b64
+    secret = cfg['channel_secret'].encode('utf-8')
+    computed = _b64.b64encode(
+        hmac.new(secret, body.encode('utf-8'), _hl.sha256).digest()
+    ).decode('utf-8')
+    if not hmac.compare_digest(computed, signature):
+        return 'Invalid signature', 400
+
+    import json as _j
+    events = _j.loads(body).get('events', [])
+    for event in events:
+        try:
+            _handle_line_punch_event(event, cfg)
+        except Exception as e:
+            print(f"[LINE PUNCH] event handler error: {e}\n{traceback.format_exc()}")
+    return 'OK', 200
+
+
+def _handle_line_punch_event(event, cfg):
+    import json as _j
+    source    = event.get('source', {})
+    user_id   = source.get('userId')
+    evt_type  = event.get('type')
+    if not user_id:
+        return
+
+    msg = event.get('message', {})
+    msg_type = msg.get('type', '')
+
+    if evt_type == 'follow':
+        # New follower — ask to bind
+        _send_line_punch(user_id,
+            '歡迎使用打卡系統！\n\n請輸入您的打卡帳號進行綁定：\n格式：綁定 帳號\n例：綁定 mary123\n\n綁定後即可透過傳送位置訊息來打卡。')
+        return
+
+    if evt_type != 'message':
+        return
+
+    with get_db() as conn:
+        staff = conn.execute(
+            "SELECT * FROM punch_staff WHERE line_user_id=%s AND active=TRUE",
+            (user_id,)
+        ).fetchone()
+
+    # ── Not bound yet ──────────────────────────────────────────
+    if not staff:
+        if msg_type == 'text':
+            text = msg.get('text', '').strip()
+            if text.startswith('綁定 ') or text.startswith('绑定 '):
+                username = text.split(' ', 1)[1].strip()
+                with get_db() as conn:
+                    candidate = conn.execute(
+                        "SELECT * FROM punch_staff WHERE username=%s AND active=TRUE",
+                        (username,)
+                    ).fetchone()
+                if not candidate:
+                    _send_line_punch(user_id, f'找不到帳號「{username}」，請確認後重試。')
+                    return
+                if candidate['line_user_id']:
+                    _send_line_punch(user_id, '此帳號已綁定其他 LINE 帳號，請聯絡管理員。')
+                    return
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE punch_staff SET line_user_id=%s WHERE id=%s",
+                        (user_id, candidate['id'])
+                    )
+                _send_line_punch(user_id,
+                    f'✅ 綁定成功！\n歡迎 {candidate["name"]}！\n\n打卡方式：\n📍 傳送位置訊息 → 自動打卡\n💬 或輸入：上班 / 下班 / 休息 / 回來\n\n輸入「狀態」可查看今日打卡記錄。')
+            else:
+                _send_line_punch(user_id,
+                    '您尚未綁定打卡帳號。\n\n請輸入：綁定 帳號\n例：綁定 mary123')
+        return
+
+    # ── Bound staff ────────────────────────────────────────────
+    PUNCH_CMDS = {
+        '上班': 'in', '上班打卡': 'in',
+        '下班': 'out', '下班打卡': 'out',
+        '休息': 'break_out', '休息開始': 'break_out',
+        '回來': 'break_in', '休息結束': 'break_in',
+    }
+    PUNCH_LABEL = {
+        'in': '上班打卡', 'out': '下班打卡',
+        'break_out': '休息開始', 'break_in': '休息結束'
+    }
+
+    if msg_type == 'location':
+        # Auto-punch with GPS verification
+        lat = msg.get('latitude')
+        lng = msg.get('longitude')
+        _do_line_punch(staff, user_id, lat, lng, None, PUNCH_LABEL, cfg)
+
+    elif msg_type == 'text':
+        text = msg.get('text', '').strip()
+
+        if text == '狀態' or text == '打卡記錄':
+            _send_status(staff, user_id)
+            return
+
+        if text == '解除綁定':
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE punch_staff SET line_user_id=NULL WHERE id=%s",
+                    (staff['id'],)
+                )
+            _send_line_punch(user_id, '已解除 LINE 帳號綁定。')
+            return
+
+        punch_type = PUNCH_CMDS.get(text)
+        if punch_type:
+            # Text command — check if GPS required
+            with get_db() as conn:
+                pcfg = conn.execute("SELECT * FROM punch_config WHERE id=1").fetchone()
+                locs = conn.execute(
+                    "SELECT * FROM punch_locations WHERE active=TRUE"
+                ).fetchall()
+
+            gps_required = pcfg['gps_required'] if pcfg else False
+            if gps_required and locs:
+                _send_line_punch(user_id,
+                    f'請傳送您的位置訊息來完成{PUNCH_LABEL[punch_type]}。\n（點選 + → 位置資訊）')
+                # Store pending punch type temporarily using bind_code field trick — 
+                # actually store in a simple in-memory dict (server restart safe enough)
+                _pending_line_punches[user_id] = punch_type
+            else:
+                # No GPS required — punch directly
+                _do_line_punch(staff, user_id, None, None, punch_type, PUNCH_LABEL, cfg)
+        else:
+            _send_line_punch(user_id,
+                f'哈囉 {staff["name"]}！\n\n打卡指令：\n📍 傳送位置 → 自動打卡\n💬 上班 / 下班 / 休息 / 回來\n📋 狀態 → 查看今日記錄')
+
+
+# In-memory pending punch (for GPS-required text command flow)
+_pending_line_punches = {}  # {line_user_id: punch_type}
+
+
+def _do_line_punch(staff, user_id, lat, lng, forced_type, PUNCH_LABEL, cfg):
+    """Execute punch with GPS check. forced_type overrides location-based auto."""
+    from datetime import datetime as _dt2
+
+    # Determine punch type
+    if forced_type:
+        punch_type = forced_type
+    elif user_id in _pending_line_punches:
+        punch_type = _pending_line_punches.pop(user_id)
+    else:
+        # Auto-detect: if no clock-in today → in, else out
+        with get_db() as conn:
+            today_records = conn.execute("""
+                SELECT punch_type FROM punch_records
+                WHERE staff_id=%s AND punched_at::date=NOW()::date
+                ORDER BY punched_at DESC LIMIT 1
+            """, (staff['id'],)).fetchone()
+        if not today_records:
+            punch_type = 'in'
+        elif today_records['punch_type'] == 'in':
+            punch_type = 'out'
+        elif today_records['punch_type'] == 'break_out':
+            punch_type = 'break_in'
+        else:
+            punch_type = 'in'
+
+    label = PUNCH_LABEL.get(punch_type, punch_type)
+
+    # GPS check
+    gps_distance = None
+    matched_name = ''
+    if lat is not None and lng is not None:
+        with get_db() as conn:
+            pcfg = conn.execute("SELECT * FROM punch_config WHERE id=1").fetchone()
+            locs = conn.execute(
+                "SELECT * FROM punch_locations WHERE active=TRUE"
+            ).fetchall()
+
+        gps_required = pcfg['gps_required'] if pcfg else False
+        if locs:
+            min_dist, min_loc = None, None
+            for loc in locs:
+                d = _gps_distance(lat, lng, float(loc['lat']), float(loc['lng']))
+                if min_dist is None or d < min_dist:
+                    min_dist, min_loc = d, loc
+            gps_distance = min_dist
+            matched_name = min_loc['location_name'] if min_loc else ''
+            if gps_required and min_dist > int(min_loc['radius_m']):
+                _send_line_punch(user_id,
+                    f'❌ {label}失敗\n'
+                    f'您距離「{min_loc["location_name"]}」{min_dist} 公尺\n'
+                    f'超出允許範圍 {min_loc["radius_m"]} 公尺\n\n'
+                    f'請確認您在正確地點後重試。')
+                return
+
+    # Duplicate check
+    with get_db() as conn:
+        recent = conn.execute("""
+            SELECT id FROM punch_records
+            WHERE staff_id=%s AND punch_type=%s
+              AND punched_at > NOW() - INTERVAL '1 minute'
+        """, (staff['id'], punch_type)).fetchone()
+        if recent:
+            _send_line_punch(user_id, f'⚠️ 1 分鐘內已打過{label}，請勿重複打卡。')
+            return
+
+        row = conn.execute("""
+            INSERT INTO punch_records
+              (staff_id, punch_type, latitude, longitude, gps_distance, location_name)
+            VALUES (%s,%s,%s,%s,%s,%s) RETURNING *
+        """, (staff['id'], punch_type,
+              lat, lng, gps_distance, matched_name)).fetchone()
+
+    now = _dt.now()
+    time_str = now.strftime('%H:%M')
+    date_str = now.strftime('%Y/%m/%d')
+    gps_info = f'\n📍 {matched_name} ({gps_distance}m)' if gps_distance is not None else ''
+
+    _send_line_punch(user_id,
+        f'✅ {label}成功\n'
+        f'👤 {staff["name"]}\n'
+        f'🕐 {date_str} {time_str}'
+        f'{gps_info}')
+
+
+def _send_status(staff, user_id):
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT punch_type, punched_at, gps_distance, location_name, is_manual
+            FROM punch_records
+            WHERE staff_id=%s AND punched_at::date=NOW()::date
+            ORDER BY punched_at ASC
+        """, (staff['id'],)).fetchall()
+
+    LABEL = {'in':'上班','out':'下班','break_out':'休息開始','break_in':'休息結束'}
+    if not rows:
+        _send_line_punch(user_id, f'📋 {staff["name"]} 今日尚無打卡記錄。')
+        return
+
+    lines = [f'📋 {staff["name"]} 今日打卡記錄']
+    for r in rows:
+        t = r['punched_at'].strftime('%H:%M') if r['punched_at'] else ''
+        label = LABEL.get(r['punch_type'], r['punch_type'])
+        dist  = f' ({r["gps_distance"]}m)' if r['gps_distance'] is not None else ''
+        manual= ' [補打]' if r['is_manual'] else ''
+        lines.append(f'• {label} {t}{dist}{manual}')
+
+    _send_line_punch(user_id, '\n'.join(lines))
+
+
+# ── Admin LINE Punch Config API ────────────────────────────────────
+
+@app.route('/api/line-punch/config', methods=['GET'])
+@login_required
+def api_line_punch_config_get():
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM line_punch_config WHERE id=1").fetchone()
+    if not row:
+        return jsonify({'enabled': False, 'channel_access_token': '', 'channel_secret': ''})
+    d = dict(row)
+    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
+    # Mask token for display
+    tok = d.get('channel_access_token','')
+    d['channel_access_token_masked'] = tok[:8]+'...' + tok[-4:] if len(tok)>12 else ('***' if tok else '')
+    return jsonify(d)
+
+@app.route('/api/line-punch/config', methods=['PUT'])
+@login_required
+def api_line_punch_config_put():
+    b = request.get_json(force=True)
+    token   = b.get('channel_access_token','').strip()
+    secret  = b.get('channel_secret','').strip()
+    enabled = bool(b.get('enabled', False))
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE line_punch_config
+            SET channel_access_token=%s, channel_secret=%s, enabled=%s, updated_at=NOW()
+            WHERE id=1
+        """, (token, secret, enabled))
+    return jsonify({'ok': True, 'enabled': enabled})
+
+@app.route('/api/line-punch/staff', methods=['GET'])
+@login_required
+def api_line_punch_staff():
+    """List staff with LINE binding status."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT id, name, username, role, active, line_user_id
+            FROM punch_staff ORDER BY name
+        """).fetchall()
+    return jsonify([{
+        'id': r['id'], 'name': r['name'], 'username': r['username'],
+        'role': r['role'], 'active': r['active'],
+        'line_bound': bool(r['line_user_id']),
+        'line_user_id': r['line_user_id'] or ''
+    } for r in rows])
+
+@app.route('/api/line-punch/staff/<int:sid>/unbind', methods=['POST'])
+@login_required
+def api_line_punch_unbind(sid):
+    with get_db() as conn:
+        conn.execute("UPDATE punch_staff SET line_user_id=NULL WHERE id=%s", (sid,))
+    return jsonify({'ok': True})
 
 @app.route('/')
 def index():
