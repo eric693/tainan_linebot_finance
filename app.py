@@ -1800,7 +1800,8 @@ def api_punch_today():
             SELECT pr.*, ps.name as staff_name
             FROM punch_records pr JOIN punch_staff ps ON ps.id=pr.staff_id
             WHERE pr.staff_id=%s
-              AND pr.punched_at::date = NOW()::date
+              AND (pr.punched_at AT TIME ZONE 'Asia/Taipei')::date
+                = (NOW() AT TIME ZONE 'Asia/Taipei')::date
             ORDER BY pr.punched_at ASC
         """, (sid,)).fetchall()
     return jsonify([punch_record_row(r) for r in rows])
@@ -2553,7 +2554,9 @@ def _do_line_punch(staff, user_id, lat, lng, forced_type, PUNCH_LABEL, cfg):
         with get_db() as conn:
             today_records = conn.execute("""
                 SELECT punch_type FROM punch_records
-                WHERE staff_id=%s AND punched_at::date=NOW()::date
+                WHERE staff_id=%s
+                  AND (punched_at AT TIME ZONE 'Asia/Taipei')::date
+                    = (NOW() AT TIME ZONE 'Asia/Taipei')::date
                 ORDER BY punched_at DESC LIMIT 1
             """, (staff['id'],)).fetchone()
         if not today_records:
@@ -2612,7 +2615,9 @@ def _do_line_punch(staff, user_id, lat, lng, forced_type, PUNCH_LABEL, cfg):
         """, (staff['id'], punch_type,
               lat, lng, gps_distance, matched_name)).fetchone()
 
-    now = _dt.now()
+    from datetime import timezone as _tz, timedelta as _td2
+    TW = _tz(_td2(hours=8))
+    now = _dt.now(TW)
     time_str = now.strftime('%H:%M')
     date_str = now.strftime('%Y/%m/%d')
     gps_info = f'\n📍 {matched_name} ({gps_distance}m)' if gps_distance is not None else ''
@@ -2629,7 +2634,9 @@ def _send_status(staff, user_id):
         rows = conn.execute("""
             SELECT punch_type, punched_at, gps_distance, location_name, is_manual
             FROM punch_records
-            WHERE staff_id=%s AND punched_at::date=NOW()::date
+            WHERE staff_id=%s
+              AND (punched_at AT TIME ZONE 'Asia/Taipei')::date
+                = (NOW() AT TIME ZONE 'Asia/Taipei')::date
             ORDER BY punched_at ASC
         """, (staff['id'],)).fetchall()
 
@@ -2638,9 +2645,17 @@ def _send_status(staff, user_id):
         _send_line_punch(user_id, f'📋 {staff["name"]} 今日尚無打卡記錄。')
         return
 
+    from datetime import timezone as _tz2, timedelta as _td3
+    TW2 = _tz2(_td3(hours=8))
     lines = [f'📋 {staff["name"]} 今日打卡記錄']
     for r in rows:
-        t = r['punched_at'].strftime('%H:%M') if r['punched_at'] else ''
+        if r['punched_at']:
+            pa = r['punched_at']
+            if pa.tzinfo is None:
+                pa = pa.replace(tzinfo=_tz2(_td3(0)))  # treat as UTC
+            t = pa.astimezone(TW2).strftime('%H:%M')
+        else:
+            t = ''
         label = LABEL.get(r['punch_type'], r['punch_type'])
         dist  = f' ({r["gps_distance"]}m)' if r['gps_distance'] is not None else ''
         manual= ' [補打]' if r['is_manual'] else ''
