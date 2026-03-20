@@ -3179,65 +3179,104 @@ def _build_richmenu_body(gps_required):
 
 
 def _create_richmenu_image(rich_menu_id, cfg, gps_required):
-    """Upload a generated SVG-based PNG image for the rich menu."""
-    import io, base64 as _b64, json as _j
+    """Generate a 2500x843 PNG with Chinese text labels and upload to LINE."""
+    import io
 
-    token = cfg.get('channel_access_token','')
-    # Build simple colored PNG using pure Python (no Pillow needed)
-    # We'll use a pre-built base64 PNG — a 2500×843 4-panel grid
-    # Instead, upload a minimal valid PNG placeholder and rely on text labels
-    # Since we can't generate PNG without Pillow, use LINE's uploadRichMenuImage
-    # with a simple solid-color 1x1 stretched PNG as fallback
-    # Actually, let's generate a simple PNG with colored cells using struct/zlib
+    token = cfg.get('channel_access_token', '')
 
-    import struct, zlib
+    try:
+        from PIL import Image, ImageDraw, ImageFont
 
-    def png_chunk(name, data):
-        c = struct.pack('>I', len(data)) + name + data
-        return c + struct.pack('>I', zlib.crc32(c[4:]) & 0xffffffff)
+        W, H = 2500, 843
+        img   = Image.new('RGB', (W, H), '#0f1c3a')
+        draw  = ImageDraw.Draw(img)
 
-    W, H = 2500, 843
-    # Create image: 4 colored panels with labels
-    # Colors: green(上班), red(下班), orange(休息), blue(回來)
-    colors = [
-        (0x2e, 0x9e, 0x6b),  # green
-        (0xd6, 0x42, 0x42),  # red
-        (0xe0, 0x7b, 0x2a),  # orange
-        (0x4a, 0x7b, 0xda),  # blue
-    ]
-    labels = ['上班打卡', '下班打卡', '休息開始', '休息結束']
+        panels = [
+            (0,    0,   1250, 421, '#2e9e6b', '上班打卡', 'Clock In'),
+            (1250, 0,   2500, 421, '#d64242', '下班打卡', 'Clock Out'),
+            (0,    422, 1250, 843, '#e07b2a', '休息開始', 'Break Out'),
+            (1250, 422, 2500, 843, '#4a7bda', '休息結束', 'Break In'),
+        ]
 
-    # Build raw pixel data row by row
-    rows = []
-    for y in range(H):
-        row = bytearray()
-        for x in range(W):
-            # Determine panel (0=TL,1=TR,2=BL,3=BR)
-            col_panel = 0 if x < 1250 else 1
-            row_panel = 0 if y < 422 else 1
-            panel = row_panel * 2 + col_panel
-            r, g, b = colors[panel]
-            # Add a dark divider line
-            if x == 1249 or x == 1250 or y == 421 or y == 422:
-                r, g, b = 0x0f, 0x1c, 0x3a
-            row += bytes([r, g, b])
-        rows.append(bytes([0]) + bytes(row))  # filter byte
+        # Load fonts
+        FONT_PATHS_ZH = [
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+            '/usr/share/fonts/noto-cjk/NotoSansCJKtc-Regular.otf',
+        ]
+        FONT_PATH_EN = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
-    compressed = zlib.compress(b''.join(rows), 6)
-    png = (b'\x89PNG\r\n\x1a\n'
-           + png_chunk(b'IHDR', struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0))
-           + png_chunk(b'IDAT', compressed)
-           + png_chunk(b'IEND', b''))
+        font_zh, font_en = None, None
+        for fp in FONT_PATHS_ZH:
+            try:
+                font_zh = ImageFont.truetype(fp, 96)
+                break
+            except Exception:
+                pass
+        try:
+            font_en = ImageFont.truetype(FONT_PATH_EN, 46)
+        except Exception:
+            pass
+        if not font_zh:
+            font_zh = ImageFont.load_default()
+        if not font_en:
+            font_en = font_zh
+
+        for x1, y1, x2, y2, color, zh, en in panels:
+            draw.rectangle([x1, y1, x2 - 1, y2 - 1], fill=color)
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            # Chinese main label
+            bb = draw.textbbox((0, 0), zh, font=font_zh)
+            tw, th = bb[2] - bb[0], bb[3] - bb[1]
+            draw.text((cx - tw // 2, cy - th // 2 - 24), zh,
+                      fill='white', font=font_zh)
+            # English subtitle
+            bb2 = draw.textbbox((0, 0), en, font=font_en)
+            tw2 = bb2[2] - bb2[0]
+            draw.text((cx - tw2 // 2, cy + th // 2 - 4), en,
+                      fill=(255, 255, 255, 160), font=font_en)
+
+        # Divider lines
+        draw.line([(1250, 0), (1250, H)], fill='#0f1c3a', width=5)
+        draw.line([(0, 421), (W, 421)],   fill='#0f1c3a', width=5)
+
+        buf = io.BytesIO()
+        img.save(buf, 'PNG', optimize=True)
+        png_bytes = buf.getvalue()
+        print(f"[RICHMENU] Generated PNG with Pillow: {len(png_bytes)} bytes")
+
+    except Exception as e:
+        # Fallback: plain colored blocks (no text) using struct/zlib
+        print(f"[RICHMENU] Pillow failed ({e}), using plain PNG fallback")
+        import struct, zlib
+
+        def _png_chunk(name, data):
+            c = struct.pack('>I', len(data)) + name + data
+            return c + struct.pack('>I', zlib.crc32(c[4:]) & 0xffffffff)
+
+        W, H = 2500, 843
+        colors = [(0x2e,0x9e,0x6b),(0xd6,0x42,0x42),(0xe0,0x7b,0x2a),(0x4a,0x7b,0xda)]
+        rows = []
+        for y in range(H):
+            row = bytearray()
+            for x in range(W):
+                p = (0 if y < 422 else 1) * 2 + (0 if x < 1250 else 1)
+                r, g, b = colors[p]
+                if x in (1249,1250) or y in (421,422):
+                    r,g,b = 0x0f,0x1c,0x3a
+                row += bytes([r, g, b])
+            rows.append(bytes([0]) + bytes(row))
+        compressed = zlib.compress(b''.join(rows), 1)
+        png_bytes = (b'\x89PNG\r\n\x1a\n'
+                     + _png_chunk(b'IHDR', struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0))
+                     + _png_chunk(b'IDAT', compressed)
+                     + _png_chunk(b'IEND', b''))
 
     upload_url = f'https://api-data.line.me/v2/bot/richmenu/{rich_menu_id}/content'
     req = urllib.request.Request(
-        upload_url,
-        data=png,
-        method='POST',
-        headers={
-            'Content-Type':  'image/png',
-            'Authorization': f'Bearer {token}'
-        }
+        upload_url, data=png_bytes, method='POST',
+        headers={'Content-Type': 'image/png', 'Authorization': f'Bearer {token}'}
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
