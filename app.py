@@ -2386,7 +2386,7 @@ def _handle_line_punch_event(event, cfg):
     if evt_type == 'follow':
         # New follower — ask to bind
         _send_line_punch(user_id,
-            '歡迎使用打卡系統！\n\n請輸入您的打卡帳號進行綁定：\n格式：綁定 帳號\n例：綁定 mary123\n\n綁定後即可透過傳送位置訊息來打卡。')
+            '歡迎使用員工打卡系統！👋\n\n請輸入您的登入帳號完成綁定。\n\n✏️ 輸入範例：\n  綁定 mary123\n（請將 mary123 換成您自己的帳號）\n\n不知道帳號？請詢問管理員。')
         return
 
     if evt_type != 'message':
@@ -2404,13 +2404,22 @@ def _handle_line_punch_event(event, cfg):
             text = msg.get('text', '').strip()
             if text.startswith('綁定 ') or text.startswith('绑定 '):
                 username = text.split(' ', 1)[1].strip()
+                # Guard: reject placeholder text
+                if username in ('帳號', '您的帳號', '[您的帳號]', 'username', '帳號名稱'):
+                    _send_line_punch(user_id,
+                        '請輸入您「實際的」登入帳號，而非說明文字。\n\n'
+                        '範例：綁定 mary123\n'
+                        '（請將 mary123 換成您自己的帳號）')
+                    return
                 with get_db() as conn:
                     candidate = conn.execute(
                         "SELECT * FROM punch_staff WHERE username=%s AND active=TRUE",
                         (username,)
                     ).fetchone()
                 if not candidate:
-                    _send_line_punch(user_id, f'找不到帳號「{username}」，請確認後重試。')
+                    _send_line_punch(user_id,
+                        f'找不到帳號「{username}」\n\n'
+                        f'請確認帳號是否正確，或詢問管理員您的登入帳號。')
                     return
                 if candidate['line_user_id']:
                     _send_line_punch(user_id, '此帳號已綁定其他 LINE 帳號，請聯絡管理員。')
@@ -2424,7 +2433,7 @@ def _handle_line_punch_event(event, cfg):
                     f'✅ 綁定成功！\n歡迎 {candidate["name"]}！\n\n打卡方式：\n📍 傳送位置訊息 → 自動打卡\n💬 或輸入：上班 / 下班 / 休息 / 回來\n\n輸入「狀態」可查看今日打卡記錄。')
             else:
                 _send_line_punch(user_id,
-                    '您尚未綁定打卡帳號。\n\n請輸入：綁定 帳號\n例：綁定 mary123')
+                    '您尚未綁定打卡帳號。\n\n請輸入您的登入帳號：\n  綁定 [您的帳號]\n\n範例：綁定 mary123\n（請將 mary123 換成您自己的帳號）')
         return
 
     # ── Bound staff ────────────────────────────────────────────
