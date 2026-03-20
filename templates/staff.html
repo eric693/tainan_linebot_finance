@@ -219,6 +219,43 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
         <div id="today-log"></div>
       </div>
 
+      <!-- Request punch button -->
+      <div style="padding:10px 20px;border-top:1px solid var(--border)">
+        <button class="btn btn-outline" style="width:100%;font-size:13px" onclick="showReqPanel()">申請補打卡</button>
+      </div>
+
+      <!-- Request form (hidden by default) -->
+      <div id="req-panel" style="display:none;padding:16px 20px;border-top:1px solid var(--border)">
+        <div class="section-label" style="margin-bottom:12px">補打卡申請</div>
+        <div style="margin-bottom:10px">
+          <div class="fl">打卡類型</div>
+          <select class="fi" id="req-type" style="margin-bottom:8px">
+            <option value="in">上班打卡</option>
+            <option value="out">下班打卡</option>
+            <option value="break_out">休息開始</option>
+            <option value="break_in">休息結束</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px">
+          <div class="fl">補打時間</div>
+          <input class="fi" type="datetime-local" id="req-time" style="margin-bottom:8px">
+        </div>
+        <div style="margin-bottom:14px">
+          <div class="fl">原因 *</div>
+          <input class="fi" id="req-reason" placeholder="例：忘記打卡、手機沒電" style="margin-bottom:0">
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-outline" style="flex:1" onclick="hideReqPanel()">取消</button>
+          <button class="btn btn-primary" style="flex:2" onclick="submitPunchReq()">送出申請</button>
+        </div>
+
+        <!-- My requests history -->
+        <div id="my-reqs" style="margin-top:16px;display:none">
+          <div class="section-label" style="margin-bottom:8px">我的申請記錄</div>
+          <div id="my-reqs-list"></div>
+        </div>
+      </div>
+
       <!-- ── TAB: 排休申請 ── -->
       <div id="panel-sched" class="tab-body" style="display:none">
         <div class="month-row">
@@ -793,6 +830,72 @@ async function loadMySalary() {
     </div>`;
   });
   wrap.innerHTML=html;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 補打卡申請
+// ═══════════════════════════════════════════════════════════════
+const REQ_LABEL = {pending:'審核中', approved:'已核准', rejected:'已退回'};
+const REQ_CLS   = {
+  pending:  'background:var(--orange-light);color:var(--orange)',
+  approved: 'background:var(--green-light);color:var(--green)',
+  rejected: 'background:var(--red-light);color:var(--red)'
+};
+
+function showReqPanel() {
+  const panel = document.getElementById('req-panel');
+  panel.style.display = '';
+  // Default time = now (Taiwan)
+  const now = new Date();
+  const local = new Date(now.getTime() + (8*60 - now.getTimezoneOffset())*60000)
+    .toISOString().slice(0,16);
+  document.getElementById('req-time').value = local;
+  loadMyReqs();
+}
+function hideReqPanel() {
+  document.getElementById('req-panel').style.display = 'none';
+}
+
+async function submitPunchReq() {
+  const punch_type   = document.getElementById('req-type').value;
+  const requested_at = document.getElementById('req-time').value;
+  const reason       = document.getElementById('req-reason').value.trim();
+  if (!reason) { showToast('請填寫補打原因','err'); return; }
+  if (!requested_at) { showToast('請選擇補打時間','err'); return; }
+
+  try {
+    const res = await fetch('/api/punch/request', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ punch_type, requested_at, reason })
+    });
+    const d = await res.json();
+    if (!res.ok) { showToast(d.error||'送出失敗','err'); return; }
+    showToast('補打卡申請已送出，等待主管審核','ok');
+    document.getElementById('req-reason').value = '';
+    await loadMyReqs();
+  } catch(e) { showToast('網路錯誤','err'); }
+}
+
+async function loadMyReqs() {
+  const res  = await fetch('/api/punch/request/my');
+  const list = await res.json();
+  const wrap = document.getElementById('my-reqs');
+  const body = document.getElementById('my-reqs-list');
+  if (!list.length) { wrap.style.display='none'; return; }
+  wrap.style.display = '';
+  body.innerHTML = list.map(r => {
+    const dt = r.requested_at ? r.requested_at.slice(0,16).replace('T',' ') : '';
+    const created = r.created_at ? r.created_at.slice(0,10) : '';
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+      <div>
+        <div style="font-size:12px;font-weight:600">${PLABEL[r.punch_type]||r.punch_type} — <span style="font-family:'DM Mono',monospace">${dt}</span></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${esc(r.reason)}</div>
+        ${r.review_note?`<div style="font-size:11px;color:var(--red);margin-top:2px">意見：${esc(r.review_note)}</div>`:''}
+      </div>
+      <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;${REQ_CLS[r.status]||''}">${REQ_LABEL[r.status]||r.status}</span>
+    </div>`;
+  }).join('');
 }
 
 </script>

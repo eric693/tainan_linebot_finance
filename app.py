@@ -341,6 +341,20 @@ def init_db():
                           (name,comp_type,calc_type,formula,default_amount,sort_order)
                         VALUES (%s,%s,%s,%s,%s,%s)
                     """, (name, ctype, cmode, formula, amt, sort))
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS punch_requests (
+                    id            SERIAL PRIMARY KEY,
+                    staff_id      INT REFERENCES punch_staff(id) ON DELETE CASCADE,
+                    punch_type    TEXT NOT NULL,
+                    requested_at  TIMESTAMPTZ NOT NULL,
+                    reason        TEXT DEFAULT '',
+                    status        TEXT DEFAULT 'pending',
+                    reviewed_by   TEXT DEFAULT '',
+                    review_note   TEXT DEFAULT '',
+                    reviewed_at   TIMESTAMPTZ,
+                    created_at    TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
         print("[OK] Database tables created")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -3313,6 +3327,113 @@ def api_richmenu_unset_default():
         return jsonify({'error': '未設定 Token'}), 400
     status, _ = _call_line_api(cfg, 'DELETE', '/user/all/richmenu')
     return jsonify({'ok': status in (200,204)})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Punch Request (補打卡申請) API
+# ═══════════════════════════════════════════════════════════════════
+
+def punch_req_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('requested_at'): d['requested_at'] = d['requested_at'].isoformat()
+    if d.get('reviewed_at'):  d['reviewed_at']  = d['reviewed_at'].isoformat()
+    if d.get('created_at'):   d['created_at']   = d['created_at'].isoformat()
+    return d
+
+# ── Employee: submit request ───────────────────────────────────────
+
+@app.route('/api/punch/request', methods=['POST'])
+def api_punch_req_submit():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    b = request.get_json(force=True)
+    punch_type   = b.get('punch_type')
+    requested_at = b.get('requested_at')   # ISO datetime string (Taiwan time)
+    reason       = b.get('reason','').strip()
+
+    if punch_type not in ('in','out','break_out','break_in'):
+        return jsonify({'error': '無效的打卡類型'}), 400
+    if not requested_at:
+        return jsonify({'error': '請選擇補打時間'}), 400
+
+    with get_db() as conn:
+        row = conn.execute("""
+            INSERT INTO punch_requests (staff_id, punch_type, requested_at, reason)
+            VALUES (%s, %s, %s, %s) RETURNING *
+        """, (sid, punch_type, requested_at, reason)).fetchone()
+    return jsonify(punch_req_row(row)), 201
+
+@app.route('/api/punch/request/my', methods=['GET'])
+def api_punch_req_my():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM punch_requests
+            WHERE staff_id=%s
+            ORDER BY requested_at DESC LIMIT 20
+        """, (sid,)).fetchall()
+    return jsonify([punch_req_row(r) for r in rows])
+
+# ── Admin: list / approve / reject ────────────────────────────────
+
+@app.route('/api/punch/requests', methods=['GET'])
+@login_required
+def api_punch_reqs_list():
+    status = request.args.get('status','')
+    conds, params = ['TRUE'], []
+    if status: conds.append('pr.status=%s'); params.append(status)
+    where = ' AND '.join(conds)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT pr.*, ps.name as staff_name, ps.role as staff_role
+            FROM punch_requests pr
+            JOIN punch_staff ps ON ps.id=pr.staff_id
+            WHERE {where}
+            ORDER BY pr.created_at DESC LIMIT 200
+        """, params).fetchall()
+    return jsonify([punch_req_row(r) for r in rows])
+
+@app.route('/api/punch/requests/<int:rid>', methods=['PUT'])
+@login_required
+def api_punch_req_review(rid):
+    b           = request.get_json(force=True)
+    action      = b.get('action')       # 'approve' | 'reject'
+    reviewed_by = b.get('reviewed_by','').strip()
+    review_note = b.get('review_note','').strip()
+
+    if action not in ('approve','reject'):
+        return jsonify({'error': 'invalid action'}), 400
+
+    new_status = 'approved' if action == 'approve' else 'rejected'
+
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE punch_requests
+            SET status=%s, reviewed_by=%s, review_note=%s, reviewed_at=NOW()
+            WHERE id=%s RETURNING *, (SELECT name FROM punch_staff WHERE id=staff_id) as staff_name
+        """, (new_status, reviewed_by, review_note, rid)).fetchone()
+
+        if not row: return ('', 404)
+
+        # If approved → insert actual punch record
+        if action == 'approve':
+            conn.execute("""
+                INSERT INTO punch_records
+                  (staff_id, punch_type, punched_at, note, is_manual, manual_by)
+                VALUES (%s, %s, %s, %s, TRUE, %s)
+            """, (row['staff_id'], row['punch_type'], row['requested_at'],
+                  f'補打卡申請 #{rid}：{row["reason"]}', reviewed_by))
+
+    return jsonify(punch_req_row(row))
+
+@app.route('/api/punch/requests/<int:rid>', methods=['DELETE'])
+@login_required
+def api_punch_req_delete(rid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM punch_requests WHERE id=%s", (rid,))
+    return jsonify({'deleted': rid})
 
 @app.route('/')
 def index():

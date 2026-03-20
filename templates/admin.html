@@ -749,7 +749,8 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <div class="inv-tab-bar">
       <button class="inv-tab active" id="punchtab-summary"  onclick="switchPunchTab('summary')">出勤摘要</button>
       <button class="inv-tab"        id="punchtab-records"  onclick="switchPunchTab('records')">打卡記錄</button>
-      <button class="inv-tab"        id="punchtab-manual"   onclick="switchPunchTab('manual')">補打卡</button>
+      <button class="inv-tab"        id="punchtab-manual"   onclick="switchPunchTab('manual')">補打卡（管理員）</button>
+      <button class="inv-tab"        id="punchtab-requests" onclick="switchPunchTab('requests')">補打申請</button>
       <button class="inv-tab"        id="punchtab-staff"    onclick="switchPunchTab('staff')">員工管理</button>
       <button class="inv-tab"        id="punchtab-gps"      onclick="switchPunchTab('gps')">GPS 設定</button>
       <button class="inv-tab"        id="punchtab-line"     onclick="switchPunchTab('line')">LINE 打卡</button>
@@ -881,6 +882,23 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       </div>
     </div>
 
+
+
+    <!-- ── 補打申請 ── -->
+    <div id="punch-panel-requests" style="display:none">
+      <div class="filter-bar" style="margin-bottom:20px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">狀態</span>
+        <select class="filter-input" id="preq-filter-status" onchange="loadPunchRequests()" style="min-width:120px">
+          <option value="pending">待審核</option>
+          <option value="">全部</option>
+          <option value="approved">已核准</option>
+          <option value="rejected">已退回</option>
+        </select>
+        <span style="flex:1"></span>
+        <span id="preq-count" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div id="preq-list"></div>
+    </div>
 
     <!-- ── GPS 設定 ── -->
     <div id="punch-panel-gps" style="display:none">
@@ -1370,6 +1388,34 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeLocModal()">取消</button>
       <button class="btn btn-primary" onclick="saveLocation()">儲存</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Punch Request Review Modal -->
+<div class="modal-overlay" id="preq-modal" style="display:none">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <span class="modal-title" id="preq-modal-title">審核補打卡申請</span>
+      <button class="modal-close" onclick="closePreqModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="preq-id">
+      <div id="preq-info" style="padding:12px;background:var(--bg);border-radius:8px;margin-bottom:14px;font-size:13px"></div>
+      <div style="margin-bottom:12px">
+        <label class="form-label">審核人員</label>
+        <input class="form-input" id="preq-by" placeholder="管理員姓名" style="width:100%">
+      </div>
+      <div>
+        <label class="form-label">審核意見（選填）</label>
+        <input class="form-input" id="preq-note" placeholder="退回原因或備註" style="width:100%">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closePreqModal()">取消</button>
+      <button class="btn btn-danger" onclick="reviewPunchReq('reject')">退回</button>
+      <button class="btn btn-green" onclick="reviewPunchReq('approve')" style="background:var(--green);color:#fff">核准並補打</button>
     </div>
   </div>
 </div>
@@ -2982,7 +3028,7 @@ function initPunch() {
 }
 
 function switchPunchTab(tab) {
-  ['summary','records','manual','staff','gps','line'].forEach(t => {
+  ['summary','records','manual','requests','staff','gps','line'].forEach(t => {
     document.getElementById('punchtab-' + t).classList.toggle('active', t === tab);
     document.getElementById('punch-panel-' + t).style.display = t === tab ? '' : 'none';
   });
@@ -2990,6 +3036,7 @@ function switchPunchTab(tab) {
   if (tab === 'records') { loadPunchStaffOptions(); loadPunchRecords(); }
   if (tab === 'manual')  { loadManualStaffOptions(); loadManualRecords(); }
   if (tab === 'staff')   loadPunchStaff();
+  if (tab === 'requests') loadPunchRequests();
   if (tab === 'gps')     loadGpsSettings();
   if (tab === 'line')    loadLinePunchConfig();
 }
@@ -4457,6 +4504,99 @@ async function unsetRichMenu() {
   const res  = await fetch('/api/line-punch/richmenu/default', { method: 'DELETE' });
   const data = await res.json();
   showToast(data.ok ? '已取消預設選單' : '操作失敗', data.ok ? 'success' : 'error');
+}
+
+
+// ── 補打卡申請審核 ─────────────────────────────────────────────
+let punchReqList = [];
+const PREQ_LABEL = {pending:'待審核', approved:'已核准', rejected:'已退回'};
+const PREQ_COLOR = {pending:'var(--orange)', approved:'var(--green)', rejected:'var(--red)'};
+const PUNCH_TYPE_LABEL = {in:'上班打卡', out:'下班打卡', break_out:'休息開始', break_in:'休息結束'};
+
+async function loadPunchRequests() {
+  const status = document.getElementById('preq-filter-status').value;
+  let url = '/api/punch/requests?';
+  if (status) url += `status=${status}`;
+  const res = await fetch(url);
+  punchReqList = await res.json();
+  document.getElementById('preq-count').textContent = `共 ${punchReqList.length} 筆`;
+  renderPunchRequests();
+}
+
+function renderPunchRequests() {
+  const wrap = document.getElementById('preq-list');
+  if (!punchReqList.length) {
+    wrap.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--muted)">無符合申請</div>';
+    return;
+  }
+  wrap.innerHTML = punchReqList.map(r => {
+    const dt      = r.requested_at ? r.requested_at.slice(0,16).replace('T',' ') : '';
+    const created = r.created_at   ? r.created_at.slice(0,16).replace('T','  ')  : '';
+    const isPending = r.status === 'pending';
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+        <div>
+          <span class="card-title">${escHtml(r.staff_name||'')}</span>
+          ${r.staff_role?`<span style="font-size:12px;color:var(--muted);margin-left:8px">${escHtml(r.staff_role)}</span>`:''}
+          <div style="font-size:12px;color:var(--muted);margin-top:3px">
+            申請時間：${created}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:700;color:${PREQ_COLOR[r.status]||'var(--muted)'}">${PREQ_LABEL[r.status]||r.status}</span>
+          ${isPending ? `<button class="btn btn-primary btn-sm" onclick="openPreqModal(${r.id})">審核</button>` : ''}
+          <button class="btn btn-danger btn-sm" onclick="deletePunchReq(${r.id})">刪除</button>
+        </div>
+      </div>
+      <div style="padding:10px 20px;background:var(--bg);display:flex;gap:20px;flex-wrap:wrap;font-size:13px">
+        <div><span style="color:var(--muted)">類型：</span><strong>${PUNCH_TYPE_LABEL[r.punch_type]||r.punch_type}</strong></div>
+        <div><span style="color:var(--muted)">補打時間：</span><strong style="font-family:'DM Mono',monospace">${dt}</strong></div>
+        <div style="flex:1"><span style="color:var(--muted)">原因：</span>${escHtml(r.reason||'')}</div>
+        ${r.review_note?`<div style="width:100%;color:${PREQ_COLOR[r.status]}">審核意見：${escHtml(r.review_note)}</div>`:''}
+        ${r.reviewed_by?`<div style="color:var(--muted);font-size:12px">審核人：${escHtml(r.reviewed_by)}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openPreqModal(id) {
+  const r = punchReqList.find(x => x.id === id);
+  if (!r) return;
+  document.getElementById('preq-id').value = id;
+  document.getElementById('preq-by').value = '';
+  document.getElementById('preq-note').value = '';
+  const dt = r.requested_at ? r.requested_at.slice(0,16).replace('T',' ') : '';
+  document.getElementById('preq-info').innerHTML =
+    `<strong>${escHtml(r.staff_name||'')}</strong> 申請補打：<strong>${PUNCH_TYPE_LABEL[r.punch_type]||r.punch_type}</strong><br>
+     <span style="font-family:'DM Mono',monospace">${dt}</span><br>
+     <span style="color:var(--muted)">原因：${escHtml(r.reason||'')}</span>`;
+  document.getElementById('preq-modal').style.display = 'flex';
+}
+function closePreqModal() { document.getElementById('preq-modal').style.display = 'none'; }
+
+async function reviewPunchReq(action) {
+  const id   = document.getElementById('preq-id').value;
+  const by   = document.getElementById('preq-by').value.trim();
+  const note = document.getElementById('preq-note').value.trim();
+  if (!by) { showToast('請填寫審核人員姓名', 'error'); return; }
+  const res  = await fetch(`/api/punch/requests/${id}`, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action, reviewed_by: by, review_note: note })
+  });
+  const d = await res.json();
+  if (d.error) { showToast(d.error, 'error'); return; }
+  closePreqModal();
+  showToast(action==='approve' ? '已核准並補打卡' : '已退回', 'success');
+  await loadPunchRequests();
+}
+
+async function deletePunchReq(id) {
+  if (!confirm('確定刪除此申請記錄？')) return;
+  await fetch(`/api/punch/requests/${id}`, {method:'DELETE'});
+  showToast('已刪除', 'success');
+  punchReqList = punchReqList.filter(r=>r.id!==id);
+  renderPunchRequests();
+  document.getElementById('preq-count').textContent = `共 ${punchReqList.length} 筆`;
 }
 
 </script>
