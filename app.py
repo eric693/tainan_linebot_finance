@@ -261,6 +261,86 @@ def init_db():
                     UNIQUE(staff_id, month)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS salary_employees (
+                    id              SERIAL PRIMARY KEY,
+                    staff_id        INT REFERENCES punch_staff(id) ON DELETE SET NULL,
+                    employee_code   TEXT UNIQUE NOT NULL,
+                    name            TEXT NOT NULL,
+                    department      TEXT DEFAULT '',
+                    position        TEXT DEFAULT '',
+                    hire_date       DATE,
+                    birth_date      DATE,
+                    base_salary     NUMERIC(12,2) DEFAULT 0,
+                    insured_salary  NUMERIC(12,2) DEFAULT 0,
+                    active          BOOLEAN DEFAULT TRUE,
+                    notes           TEXT DEFAULT '',
+                    created_at      TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS salary_components (
+                    id              SERIAL PRIMARY KEY,
+                    name            TEXT NOT NULL,
+                    comp_type       TEXT NOT NULL,
+                    calc_type       TEXT DEFAULT 'fixed',
+                    formula         TEXT DEFAULT '',
+                    default_amount  NUMERIC(12,2) DEFAULT 0,
+                    sort_order      INT DEFAULT 0,
+                    is_birthday     BOOLEAN DEFAULT FALSE,
+                    active          BOOLEAN DEFAULT TRUE,
+                    description     TEXT DEFAULT '',
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS salary_records (
+                    id               SERIAL PRIMARY KEY,
+                    employee_id      INT REFERENCES salary_employees(id) ON DELETE CASCADE,
+                    month            TEXT NOT NULL,
+                    gross_pay        NUMERIC(12,2) DEFAULT 0,
+                    total_deductions NUMERIC(12,2) DEFAULT 0,
+                    net_pay          NUMERIC(12,2) DEFAULT 0,
+                    pay_date         DATE,
+                    status           TEXT DEFAULT 'draft',
+                    notes            TEXT DEFAULT '',
+                    created_at       TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(employee_id, month)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS salary_record_items (
+                    id              SERIAL PRIMARY KEY,
+                    record_id       INT REFERENCES salary_records(id) ON DELETE CASCADE,
+                    component_id    INT,
+                    component_name  TEXT NOT NULL,
+                    comp_type       TEXT NOT NULL,
+                    amount          NUMERIC(12,2) DEFAULT 0,
+                    note            TEXT DEFAULT ''
+                )
+            """)
+            # Seed default components if empty
+            existing = conn.execute("SELECT COUNT(*) as cnt FROM salary_components").fetchone()
+            if existing['cnt'] == 0:
+                defaults = [
+                    ('本薪',     'allowance', 'formula', 'base_salary',     0, 1),
+                    ('伙食津貼', 'allowance', 'fixed',   '',              2400, 2),
+                    ('職務加給', 'allowance', 'fixed',   '',                 0, 3),
+                    ('全勤獎金', 'allowance', 'fixed',   '',                 0, 4),
+                    ('加班費',   'allowance', 'fixed',   '',                 0, 5),
+                    ('獎金',     'allowance', 'fixed',   '',                 0, 6),
+                    ('勞保費',   'deduction', 'formula', 'insured_salary*0.011', 0, 10),
+                    ('健保費',   'deduction', 'formula', 'insured_salary*0.0517/6*2', 0, 11),
+                    ('勞退6%',   'allowance', 'formula', 'base_salary*0.06', 0, 12),
+                ]
+                for name, ctype, cmode, formula, amt, sort in defaults:
+                    conn.execute("""
+                        INSERT INTO salary_components
+                          (name,comp_type,calc_type,formula,default_amount,sort_order)
+                        VALUES (%s,%s,%s,%s,%s,%s)
+                    """, (name, ctype, cmode, formula, amt, sort))
         print("[OK] Database tables created")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -2572,6 +2652,393 @@ def api_line_punch_unbind(sid):
     with get_db() as conn:
         conn.execute("UPDATE punch_staff SET line_user_id=NULL WHERE id=%s", (sid,))
     return jsonify({'ok': True})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Salary Module API
+# ═══════════════════════════════════════════════════════════════════
+import ast as _ast
+
+def _safe_eval(formula, ctx):
+    """Evaluate a simple arithmetic formula with whitelisted names."""
+    allowed_names = {k: v for k, v in ctx.items()}
+    allowed_names.update({'round': round, 'max': max, 'min': min, 'abs': abs, 'int': int, 'float': float})
+    try:
+        tree = _ast.parse(formula, mode='eval')
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call):
+                if not (isinstance(node.func, _ast.Name) and node.func.id in allowed_names):
+                    return 0
+            elif isinstance(node, _ast.Name):
+                if node.id not in allowed_names:
+                    return 0
+        result = eval(compile(tree, '<formula>', 'eval'), {"__builtins__": {}}, allowed_names)
+        return round(float(result), 2)
+    except Exception:
+        return 0
+
+def _calc_service_years(hire_date):
+    if not hire_date:
+        return 0
+    from datetime import date as _date
+    today = _date.today()
+    return (today - hire_date).days // 365
+
+def _is_birth_month(birth_date, month_str):
+    if not birth_date:
+        return False
+    return birth_date.month == int(month_str[5:7])
+
+def _compute_item_amount(comp, emp, month_str):
+    ctx = {
+        'base_salary':     float(emp['base_salary'] or 0),
+        'insured_salary':  float(emp['insured_salary'] or 0),
+        'service_years':   _calc_service_years(emp.get('hire_date')),
+    }
+    if comp['calc_type'] == 'formula' and comp['formula']:
+        return _safe_eval(comp['formula'], ctx)
+    return float(comp['default_amount'] or 0)
+
+def sal_emp_row(row):
+    if not row: return None
+    d = dict(row)
+    for f in ['base_salary','insured_salary']:
+        if d.get(f) is not None: d[f] = float(d[f])
+    for f in ['hire_date','birth_date']:
+        if d.get(f): d[f] = d[f].isoformat()
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
+    return d
+
+def sal_rec_row(row, items=None):
+    if not row: return None
+    d = dict(row)
+    for f in ['gross_pay','total_deductions','net_pay']:
+        if d.get(f) is not None: d[f] = float(d[f])
+    if d.get('pay_date'): d['pay_date'] = d['pay_date'].isoformat()
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
+    if items is not None:
+        d['items'] = [{'id': i['id'], 'component_id': i['component_id'],
+                       'component_name': i['component_name'],
+                       'comp_type': i['comp_type'],
+                       'amount': float(i['amount']),
+                       'note': i['note']} for i in items]
+    return d
+
+# ── Salary Employees ───────────────────────────────────────────────
+
+@app.route('/api/salary/employees', methods=['GET'])
+@login_required
+def api_sal_emp_list():
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT se.*, ps.username as punch_username
+            FROM salary_employees se
+            LEFT JOIN punch_staff ps ON ps.id=se.staff_id
+            ORDER BY se.employee_code
+        """).fetchall()
+    return jsonify([sal_emp_row(r) for r in rows])
+
+@app.route('/api/salary/employees', methods=['POST'])
+@login_required
+def api_sal_emp_create():
+    b = request.get_json(force=True)
+    try:
+        with get_db() as conn:
+            row = conn.execute("""
+                INSERT INTO salary_employees
+                  (staff_id,employee_code,name,department,position,
+                   hire_date,birth_date,base_salary,insured_salary,notes)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+            """, (b.get('staff_id') or None, b['employee_code'], b['name'],
+                  b.get('department',''), b.get('position',''),
+                  b.get('hire_date') or None, b.get('birth_date') or None,
+                  float(b.get('base_salary') or 0),
+                  float(b.get('insured_salary') or 0),
+                  b.get('notes',''))).fetchone()
+        return jsonify(sal_emp_row(row)), 201
+    except psycopg.errors.UniqueViolation:
+        return jsonify({'error': '員工代碼已存在'}), 409
+
+@app.route('/api/salary/employees/<int:eid>', methods=['PUT'])
+@login_required
+def api_sal_emp_update(eid):
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE salary_employees SET
+              staff_id=%s,employee_code=%s,name=%s,department=%s,position=%s,
+              hire_date=%s,birth_date=%s,base_salary=%s,insured_salary=%s,
+              active=%s,notes=%s,updated_at=NOW()
+            WHERE id=%s RETURNING *
+        """, (b.get('staff_id') or None, b['employee_code'], b['name'],
+              b.get('department',''), b.get('position',''),
+              b.get('hire_date') or None, b.get('birth_date') or None,
+              float(b.get('base_salary') or 0),
+              float(b.get('insured_salary') or 0),
+              bool(b.get('active', True)),
+              b.get('notes',''), eid)).fetchone()
+    return jsonify(sal_emp_row(row)) if row else ('', 404)
+
+@app.route('/api/salary/employees/<int:eid>', methods=['DELETE'])
+@login_required
+def api_sal_emp_delete(eid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM salary_employees WHERE id=%s", (eid,))
+    return jsonify({'deleted': eid})
+
+# ── Salary Components ──────────────────────────────────────────────
+
+@app.route('/api/salary/components', methods=['GET'])
+@login_required
+def api_sal_comp_list():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM salary_components ORDER BY sort_order, id"
+        ).fetchall()
+    return jsonify([dict(r) | {'default_amount': float(r['default_amount'])} for r in rows])
+
+@app.route('/api/salary/components', methods=['POST'])
+@login_required
+def api_sal_comp_create():
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            INSERT INTO salary_components
+              (name,comp_type,calc_type,formula,default_amount,sort_order,is_birthday,description)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *
+        """, (b['name'], b['comp_type'], b.get('calc_type','fixed'),
+              b.get('formula',''), float(b.get('default_amount') or 0),
+              int(b.get('sort_order') or 0), bool(b.get('is_birthday',False)),
+              b.get('description',''))).fetchone()
+    return jsonify(dict(row)), 201
+
+@app.route('/api/salary/components/<int:cid>', methods=['PUT'])
+@login_required
+def api_sal_comp_update(cid):
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE salary_components SET
+              name=%s,comp_type=%s,calc_type=%s,formula=%s,
+              default_amount=%s,sort_order=%s,is_birthday=%s,active=%s,description=%s
+            WHERE id=%s RETURNING *
+        """, (b['name'], b['comp_type'], b.get('calc_type','fixed'),
+              b.get('formula',''), float(b.get('default_amount') or 0),
+              int(b.get('sort_order') or 0), bool(b.get('is_birthday',False)),
+              bool(b.get('active',True)), b.get('description',''), cid)).fetchone()
+    return jsonify(dict(row)) if row else ('', 404)
+
+@app.route('/api/salary/components/<int:cid>', methods=['DELETE'])
+@login_required
+def api_sal_comp_delete(cid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM salary_components WHERE id=%s", (cid,))
+    return jsonify({'deleted': cid})
+
+# ── Salary Records ─────────────────────────────────────────────────
+
+@app.route('/api/salary/records/<month>', methods=['GET'])
+@login_required
+def api_sal_records_month(month):
+    """Get all salary records for a month with items."""
+    with get_db() as conn:
+        recs = conn.execute("""
+            SELECT sr.*, se.name as emp_name, se.employee_code,
+                   se.department, se.position
+            FROM salary_records sr
+            JOIN salary_employees se ON se.id=sr.employee_id
+            WHERE sr.month=%s
+            ORDER BY se.employee_code
+        """, (month,)).fetchall()
+        result = []
+        for r in recs:
+            items = conn.execute(
+                "SELECT * FROM salary_record_items WHERE record_id=%s ORDER BY comp_type, id",
+                (r['id'],)
+            ).fetchall()
+            d = sal_rec_row(r, items)
+            d['emp_name']       = r['emp_name']
+            d['employee_code']  = r['employee_code']
+            d['department']     = r['department']
+            d['position']       = r['position']
+            result.append(d)
+    return jsonify(result)
+
+@app.route('/api/salary/records/<month>/generate', methods=['POST'])
+@login_required
+def api_sal_generate(month):
+    """Auto-generate salary records for all active employees."""
+    with get_db() as conn:
+        emps  = conn.execute(
+            "SELECT * FROM salary_employees WHERE active=TRUE ORDER BY employee_code"
+        ).fetchall()
+        comps = conn.execute(
+            "SELECT * FROM salary_components WHERE active=TRUE ORDER BY sort_order"
+        ).fetchall()
+
+        generated, skipped = [], []
+        for emp in emps:
+            # Skip if confirmed record exists
+            existing = conn.execute(
+                "SELECT id, status FROM salary_records WHERE employee_id=%s AND month=%s",
+                (emp['id'], month)
+            ).fetchone()
+            if existing and existing['status'] == 'confirmed':
+                skipped.append(emp['name'])
+                continue
+
+            # Compute items
+            items_data = []
+            birth_month_match = _is_birth_month(emp.get('birth_date'), month)
+
+            for comp in comps:
+                # Skip birthday bonus if not birth month
+                if comp['is_birthday'] and not birth_month_match:
+                    continue
+                amount = _compute_item_amount(comp, emp, month)
+                items_data.append({
+                    'component_id': comp['id'],
+                    'component_name': comp['name'],
+                    'comp_type': comp['comp_type'],
+                    'amount': amount,
+                    'note': '生日禮金' if comp['is_birthday'] else ''
+                })
+
+            gross = sum(i['amount'] for i in items_data if i['comp_type'] == 'allowance')
+            deduct= sum(i['amount'] for i in items_data if i['comp_type'] == 'deduction')
+            net   = gross - deduct
+
+            if existing:
+                # Update existing draft
+                rid = existing['id']
+                conn.execute(
+                    "UPDATE salary_records SET gross_pay=%s,total_deductions=%s,net_pay=%s,updated_at=NOW() WHERE id=%s",
+                    (gross, deduct, net, rid)
+                )
+                conn.execute("DELETE FROM salary_record_items WHERE record_id=%s", (rid,))
+            else:
+                row = conn.execute("""
+                    INSERT INTO salary_records (employee_id,month,gross_pay,total_deductions,net_pay)
+                    VALUES (%s,%s,%s,%s,%s) RETURNING id
+                """, (emp['id'], month, gross, deduct, net)).fetchone()
+                rid = row['id']
+
+            for it in items_data:
+                conn.execute("""
+                    INSERT INTO salary_record_items
+                      (record_id,component_id,component_name,comp_type,amount,note)
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                """, (rid, it['component_id'], it['component_name'],
+                      it['comp_type'], it['amount'], it['note']))
+            generated.append(emp['name'])
+
+    return jsonify({'generated': generated, 'skipped': skipped})
+
+@app.route('/api/salary/records/<int:rid>', methods=['GET'])
+@login_required
+def api_sal_record_get(rid):
+    with get_db() as conn:
+        r = conn.execute("""
+            SELECT sr.*, se.name as emp_name, se.employee_code,
+                   se.department, se.position, se.base_salary, se.hire_date, se.birth_date
+            FROM salary_records sr JOIN salary_employees se ON se.id=sr.employee_id
+            WHERE sr.id=%s
+        """, (rid,)).fetchone()
+        if not r: return ('', 404)
+        items = conn.execute(
+            "SELECT * FROM salary_record_items WHERE record_id=%s ORDER BY comp_type, id",
+            (rid,)
+        ).fetchall()
+    d = sal_rec_row(r, items)
+    d['emp_name'] = r['emp_name']; d['employee_code'] = r['employee_code']
+    d['department'] = r['department']; d['position'] = r['position']
+    d['base_salary'] = float(r['base_salary']) if r['base_salary'] else 0
+    d['hire_date'] = r['hire_date'].isoformat() if r['hire_date'] else None
+    d['service_years'] = _calc_service_years(r.get('hire_date'))
+    return jsonify(d)
+
+@app.route('/api/salary/records/<int:rid>', methods=['PUT'])
+@login_required
+def api_sal_record_update(rid):
+    """Update record items and recalculate totals."""
+    b = request.get_json(force=True)
+    items = b.get('items', [])
+    pay_date = b.get('pay_date') or None
+    status   = b.get('status', 'draft')
+    notes    = b.get('notes','').strip()
+
+    gross  = sum(float(i['amount']) for i in items if i['comp_type'] == 'allowance')
+    deduct = sum(float(i['amount']) for i in items if i['comp_type'] == 'deduction')
+    net    = gross - deduct
+
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE salary_records SET
+              gross_pay=%s, total_deductions=%s, net_pay=%s,
+              pay_date=%s, status=%s, notes=%s, updated_at=NOW()
+            WHERE id=%s
+        """, (gross, deduct, net, pay_date, status, notes, rid))
+        conn.execute("DELETE FROM salary_record_items WHERE record_id=%s", (rid,))
+        for it in items:
+            conn.execute("""
+                INSERT INTO salary_record_items
+                  (record_id,component_id,component_name,comp_type,amount,note)
+                VALUES (%s,%s,%s,%s,%s,%s)
+            """, (rid, it.get('component_id'), it['component_name'],
+                  it['comp_type'], float(it['amount']), it.get('note','')))
+    return jsonify({'ok': True, 'net_pay': net})
+
+@app.route('/api/salary/records/<int:rid>/confirm', methods=['POST'])
+@login_required
+def api_sal_record_confirm(rid):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE salary_records SET status='confirmed', updated_at=NOW() WHERE id=%s", (rid,)
+        )
+    return jsonify({'ok': True})
+
+@app.route('/api/salary/records/<int:rid>', methods=['DELETE'])
+@login_required
+def api_sal_record_delete(rid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM salary_records WHERE id=%s", (rid,))
+    return jsonify({'deleted': rid})
+
+# ── Employee self-service (punch session) ─────────────────────────
+
+@app.route('/api/salary/my-records', methods=['GET'])
+def api_sal_my_records():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    month = request.args.get('month','')
+    with get_db() as conn:
+        emp = conn.execute(
+            "SELECT * FROM salary_employees WHERE staff_id=%s AND active=TRUE", (sid,)
+        ).fetchone()
+        if not emp: return jsonify({'records': [], 'employee': None})
+
+        conds = ["sr.employee_id=%s"]
+        params = [emp['id']]
+        if month:
+            conds.append("sr.month=%s"); params.append(month)
+
+        recs = conn.execute(f"""
+            SELECT sr.* FROM salary_records sr
+            WHERE {' AND '.join(conds)} AND sr.status='confirmed'
+            ORDER BY sr.month DESC LIMIT 24
+        """, params).fetchall()
+
+        records = []
+        for r in recs:
+            items = conn.execute(
+                "SELECT * FROM salary_record_items WHERE record_id=%s ORDER BY comp_type, id",
+                (r['id'],)
+            ).fetchall()
+            records.append(sal_rec_row(r, items))
+
+    return jsonify({'records': records, 'employee': sal_emp_row(emp)})
 
 @app.route('/')
 def index():

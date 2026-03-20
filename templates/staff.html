@@ -187,6 +187,7 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
         <button class="tab active" id="tab-punch" onclick="switchTab('punch')">打卡</button>
         <button class="tab"        id="tab-sched" onclick="switchTab('sched')">排休申請</button>
         <button class="tab"        id="tab-schedule-view" onclick="switchTab('schedule-view')">我的排班</button>
+      <button class="tab"        id="tab-salary"        onclick="switchTab('salary')">薪資查詢</button>
       </div>
 
       <!-- ── TAB: 打卡 ── -->
@@ -272,6 +273,18 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
         </div>
       </div>
 
+
+      <!-- ── TAB: 薪資查詢 ── -->
+      <div id="panel-salary" class="tab-body" style="display:none">
+        <div class="month-row">
+          <span style="font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.08em;text-transform:uppercase">月份</span>
+          <input type="month" class="month-inp" id="sal-view-month" onchange="loadMySalary()">
+          <button class="btn btn-outline" style="font-size:12px;padding:7px 12px" onclick="loadMySalary()">查詢</button>
+        </div>
+        <div id="my-salary-content">
+          <div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">請選擇月份查詢薪資</div>
+        </div>
+      </div>
     </div><!-- end main card -->
   </div><!-- end screen-main -->
 </div><!-- end wrap -->
@@ -367,7 +380,7 @@ function showMain(){
 }
 
 function switchTab(tab){
-  ['punch','sched','schedule-view'].forEach(t=>{
+  ['punch','sched','schedule-view','salary'].forEach(t=>{
     document.getElementById('tab-'+t).classList.toggle('active',t===tab);
     document.getElementById('panel-'+t).style.display=t===tab?'':'none';
   });
@@ -375,6 +388,7 @@ function switchTab(tab){
   if(tab==='punch')    { startGPS(); loadTodayLog(); }
   if(tab==='sched')    initSchedTab();
   if(tab==='schedule-view') initScheduleViewTab();
+  if(tab==='salary')   initSalaryTab();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -721,6 +735,66 @@ function showToast(msg,type){
   setTimeout(()=>el.classList.remove('show'),3500);
 }
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ═══════════════════════════════════════════════════════════════
+// 薪資查詢
+// ═══════════════════════════════════════════════════════════════
+function initSalaryTab() {
+  const n=new Date();
+  const ym=n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0');
+  if(!document.getElementById('sal-view-month').value)
+    document.getElementById('sal-view-month').value=ym;
+  loadMySalary();
+}
+async function loadMySalary() {
+  const month=document.getElementById('sal-view-month').value;
+  const wrap=document.getElementById('my-salary-content');
+  wrap.innerHTML='<div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">載入中...</div>';
+  const url='/api/salary/my-records'+(month?`?month=${month}`:'');
+  const res=await fetch(url);
+  const data=await res.json();
+  if(data.error){ wrap.innerHTML='<div style="text-align:center;color:var(--red);font-size:13px;padding:16px">'+esc(data.error)+'</div>'; return; }
+  if(!data.employee){ wrap.innerHTML='<div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">您的帳號尚未連結薪資資料，請聯絡管理員。</div>'; return; }
+  if(!data.records||!data.records.length){ wrap.innerHTML='<div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">查無薪資記錄</div>'; return; }
+
+  const e=data.employee;
+  let html=`<div style="padding:10px 0 14px;font-size:12px;color:var(--muted)">
+    ${esc(e.employee_code)} ${esc(e.name)} · ${esc(e.department||'')} ${esc(e.position||'')}
+  </div>`;
+
+  data.records.forEach(r=>{
+    const allows=r.items.filter(i=>i.comp_type==='allowance');
+    const deducts=r.items.filter(i=>i.comp_type==='deduction');
+    html+=`<div style="border:1.5px solid var(--border);border-radius:12px;margin-bottom:14px;overflow:hidden">
+      <div style="padding:12px 14px;background:var(--navy);display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:14px;font-weight:700;color:#fff">${r.month} 薪資單</span>
+        ${r.pay_date?`<span style="font-size:11px;color:rgba(255,255,255,.55)">支付日：${r.pay_date}</span>`:''}
+      </div>
+      <div style="display:flex;gap:0;border-bottom:1px solid var(--border)">
+        <div style="flex:1;padding:10px 14px;text-align:center;border-right:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--muted)">津貼合計</div>
+          <div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--green)">$${Number(r.gross_pay||0).toLocaleString()}</div>
+        </div>
+        <div style="flex:1;padding:10px 14px;text-align:center;border-right:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--muted)">扣除合計</div>
+          <div style="font-family:'DM Mono',monospace;font-size:15px;font-weight:700;color:var(--red)">-$${Number(r.total_deductions||0).toLocaleString()}</div>
+        </div>
+        <div style="flex:1;padding:10px 14px;text-align:center;background:var(--green-light)">
+          <div style="font-size:10px;color:var(--green)">實領金額</div>
+          <div style="font-family:'DM Mono',monospace;font-size:18px;font-weight:700;color:var(--green)">$${Number(r.net_pay||0).toLocaleString()}</div>
+        </div>
+      </div>
+      <div style="padding:12px 14px">
+        ${allows.length?`<div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:6px">津貼明細</div>
+        ${allows.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #f5f5f5"><span>${esc(i.component_name)}${i.note?` <span style="font-size:10px;color:var(--muted)">(${esc(i.note)})</span>`:''}</span><span style="font-family:'DM Mono',monospace;font-weight:600">$${Number(i.amount||0).toLocaleString()}</span></div>`).join('')}`:''}
+        ${deducts.length?`<div style="font-size:11px;font-weight:700;color:var(--red);margin:10px 0 6px">扣除明細</div>
+        ${deducts.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #f5f5f5"><span>${esc(i.component_name)}</span><span style="font-family:'DM Mono',monospace;font-weight:600;color:var(--red)">-$${Number(i.amount||0).toLocaleString()}</span></div>`).join('')}`:''}
+      </div>
+    </div>`;
+  });
+  wrap.innerHTML=html;
+}
+
 </script>
 </body>
 </html>
