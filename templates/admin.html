@@ -1130,7 +1130,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
     <div class="inv-tab-bar">
       <button class="inv-tab active" id="saltab-calc"  onclick="switchSalTab('calc')">月薪計算</button>
-      <button class="inv-tab"        id="saltab-emps"  onclick="switchSalTab('emps')">員工資料</button>
+      <button class="inv-tab"        id="saltab-emps"  onclick="switchSalTab('emps')">薪資設定</button>
       <button class="inv-tab"        id="saltab-comps" onclick="switchSalTab('comps')">薪資項目</button>
     </div>
 
@@ -1150,13 +1150,16 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <div id="sal-panel-emps" style="display:none">
       <div class="section-head">
         <span id="sal-emp-count" style="font-size:13px;color:var(--muted)"></span>
-        <button class="btn btn-primary" onclick="openSalEmpModal()">新增員工</button>
+        <a href="javascript:showPage('punch',null);switchPunchTab('staff')" class="btn btn-outline btn-sm" onclick="showPage('punch',event);setTimeout(()=>switchPunchTab('staff'),100)">管理員工 →</a>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px;padding:10px 14px;background:var(--accent-light);border-radius:8px">
+        員工清單來自「打卡管理 → 員工管理」，在此設定各員工的薪資相關資料（底薪、投保薪資等）。
       </div>
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>代碼</th><th>姓名</th><th>部門</th><th>職稱</th><th>到職日</th><th>年資</th><th>底薪</th><th>投保薪資</th><th>狀態</th><th>操作</th></tr></thead>
-            <tbody id="sal-emp-tbody"><tr><td colspan="10" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
+            <thead><tr><th>姓名</th><th>帳號</th><th>部門</th><th>職稱</th><th>到職日</th><th>底薪</th><th>投保薪資</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="sal-emp-tbody"><tr><td colspan="9" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1200,38 +1203,35 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
 <!-- Salary Employee Modal -->
 <div class="modal-overlay" id="sal-emp-modal" style="display:none">
-  <div class="modal" style="max-width:580px">
+  <div class="modal" style="max-width:500px">
     <div class="modal-header">
-      <span class="modal-title" id="sem-title">新增員工</span>
+      <span class="modal-title" id="sem-title">設定薪資</span>
       <button class="modal-close" onclick="closeSalEmpModal()">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="sem-id">
-      <div class="form-row">
-        <div><label class="form-label">員工代碼 *</label><input class="form-input" id="sem-code" placeholder="例：EMP001"></div>
-        <div><label class="form-label">姓名 *</label><input class="form-input" id="sem-name"></div>
+      <input type="hidden" id="sem-name">
+      <div style="padding:10px 14px;background:var(--bg);border-radius:8px;margin-bottom:16px;font-size:13px;color:var(--muted)">
+        員工資料由打卡系統管理，在此設定薪資計算所需資料。
       </div>
       <div class="form-row">
+        <div><label class="form-label">員工代碼</label><input class="form-input" id="sem-code" placeholder="例：EMP001"></div>
         <div><label class="form-label">部門</label><input class="form-input" id="sem-dept" placeholder="例：外場"></div>
-        <div><label class="form-label">職稱</label><input class="form-input" id="sem-pos" placeholder="例：服務員"></div>
       </div>
       <div class="form-row">
+        <div><label class="form-label">職稱</label><input class="form-input" id="sem-pos" placeholder="例：服務員"></div>
         <div><label class="form-label">到職日</label><input class="form-input" type="date" id="sem-hire"></div>
-        <div><label class="form-label">生日</label><input class="form-input" type="date" id="sem-birth"></div>
+      </div>
+      <div class="form-row">
+        <div><label class="form-label">生日</label><input class="form-input" type="date" id="sem-birth">
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">用於計算當月生日禮金</div>
+        </div>
+        <div></div>
       </div>
       <div class="form-row">
         <div><label class="form-label">底薪（月）</label><input class="form-input" type="number" id="sem-base" placeholder="0" min="0"></div>
-        <div><label class="form-label">投保薪資</label><input class="form-input" type="number" id="sem-insured" placeholder="0" min="0"></div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label class="form-label">連結打卡帳號</label>
-          <select class="form-input" id="sem-staff-id"><option value="">不連結</option></select>
-          <div style="font-size:11px;color:var(--muted);margin-top:3px">連結後員工可在 /staff 查詢薪資</div>
-        </div>
-        <div>
-          <label class="form-label">狀態</label>
-          <select class="form-input" id="sem-active"><option value="1">在職</option><option value="0">離職</option></select>
+        <div><label class="form-label">投保薪資</label><input class="form-input" type="number" id="sem-insured" placeholder="0" min="0">
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">用於勞健保公式計算</div>
         </div>
       </div>
       <div><label class="form-label">備註</label><input class="form-input" id="sem-notes" placeholder="選填" style="width:100%"></div>
@@ -4252,71 +4252,50 @@ function buildSlipHTML(code, name, dept, pos, month, payDate, allows, deducts, g
 }
 function escHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-// ── Employees ─────────────────────────────────────────────────
+// ── Salary settings (uses punch_staff) ───────────────────────
 async function loadSalEmps() {
   const res = await fetch('/api/salary/employees');
   salEmps = await res.json();
   const tb = document.getElementById('sal-emp-tbody');
-  document.getElementById('sal-emp-count').textContent = `共 ${salEmps.length} 位員工`;
+  document.getElementById('sal-emp-count').textContent = `共 ${salEmps.length} 位員工（來自打卡系統）`;
   if (!salEmps.length) {
-    tb.innerHTML = '<tr><td colspan="10" class="empty-state"><div class="empty-state-text">尚無員工，請新增</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="empty-state-text">請先至打卡管理新增員工</div></td></tr>';
     return;
   }
   tb.innerHTML = salEmps.map(e => {
     const hireDate = e.hire_date ? new Date(e.hire_date) : null;
     const years = hireDate ? Math.floor((Date.now() - hireDate) / (1000*60*60*24*365)) : 0;
     return `<tr>
-      <td style="font-family:'DM Mono',monospace;font-size:12px">${escHtml(e.employee_code)}</td>
       <td style="font-weight:600">${escHtml(e.name)}</td>
-      <td style="color:var(--muted)">${escHtml(e.department||'')}</td>
-      <td style="color:var(--muted)">${escHtml(e.position||'')}</td>
+      <td style="font-family:'DM Mono',monospace;font-size:12px;color:var(--muted)">${escHtml(e.username||'')}</td>
+      <td style="color:var(--muted)">${escHtml(e.department||'—')}</td>
+      <td style="color:var(--muted)">${escHtml(e.position_title||'—')}</td>
       <td style="font-size:12px">${e.hire_date||'—'}</td>
-      <td style="text-align:center">${years}</td>
       <td style="font-family:'DM Mono',monospace;text-align:right">$${Number(e.base_salary||0).toLocaleString()}</td>
       <td style="font-family:'DM Mono',monospace;text-align:right">$${Number(e.insured_salary||0).toLocaleString()}</td>
-      <td>${e.active ? '<span class="badge badge-ok">在職</span>' : '<span class="badge badge-warn">離職</span>'}</td>
-      <td style="white-space:nowrap">
-        <button class="btn btn-outline btn-sm" onclick="openSalEmpModal(${e.id})">編輯</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteSalEmp(${e.id})" style="margin-left:4px">刪除</button>
+      <td>${e.active ? '<span class="badge badge-ok">在職</span>' : '<span class="badge badge-warn">停用</span>'}</td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="openSalEmpModal(${e.id})">設定薪資</button>
       </td>
     </tr>`;
   }).join('');
 }
 
-async function openSalEmpModal(id=null) {
+function openSalEmpModal(id) {
   salEditEmpId = id;
-  document.getElementById('sem-title').textContent = id ? '編輯員工' : '新增員工';
-  // Load punch staff for dropdown
-  if (!punchStaffList.length) {
-    const r = await fetch('/api/punch/staff');
-    punchStaffList = await r.json();
-  }
-  const sel = document.getElementById('sem-staff-id');
-  sel.innerHTML = '<option value="">不連結</option>' +
-    punchStaffList.map(s => `<option value="${s.id}">${escHtml(s.name)} (${escHtml(s.username||'')})</option>`).join('');
-
-  if (id) {
-    const e = salEmps.find(x => x.id === id);
-    if (!e) return;
-    document.getElementById('sem-id').value      = e.id;
-    document.getElementById('sem-code').value    = e.employee_code;
-    document.getElementById('sem-name').value    = e.name;
-    document.getElementById('sem-dept').value    = e.department||'';
-    document.getElementById('sem-pos').value     = e.position||'';
-    document.getElementById('sem-hire').value    = e.hire_date||'';
-    document.getElementById('sem-birth').value   = e.birth_date||'';
-    document.getElementById('sem-base').value    = e.base_salary||0;
-    document.getElementById('sem-insured').value = e.insured_salary||0;
-    document.getElementById('sem-staff-id').value= e.staff_id||'';
-    document.getElementById('sem-active').value  = e.active ? '1' : '0';
-    document.getElementById('sem-notes').value   = e.notes||'';
-  } else {
-    ['sem-id','sem-code','sem-name','sem-dept','sem-pos','sem-hire','sem-birth','sem-notes'].forEach(i=>document.getElementById(i).value='');
-    document.getElementById('sem-base').value = '0';
-    document.getElementById('sem-insured').value = '0';
-    document.getElementById('sem-active').value = '1';
-    document.getElementById('sem-staff-id').value = '';
-  }
+  const e = salEmps.find(x => x.id === id);
+  if (!e) return;
+  document.getElementById('sem-title').textContent = `設定薪資 — ${e.name}`;
+  document.getElementById('sem-id').value      = e.id;
+  document.getElementById('sem-code').value    = e.employee_code || '';
+  document.getElementById('sem-name').value    = e.name;
+  document.getElementById('sem-dept').value    = e.department || '';
+  document.getElementById('sem-pos').value     = e.position_title || '';
+  document.getElementById('sem-hire').value    = e.hire_date || '';
+  document.getElementById('sem-birth').value   = e.birth_date || '';
+  document.getElementById('sem-base').value    = e.base_salary || 0;
+  document.getElementById('sem-insured').value = e.insured_salary || 0;
+  document.getElementById('sem-notes').value   = e.salary_notes || '';
   document.getElementById('sal-emp-modal').style.display = 'flex';
 }
 function closeSalEmpModal() { document.getElementById('sal-emp-modal').style.display = 'none'; }
@@ -4324,35 +4303,26 @@ function closeSalEmpModal() { document.getElementById('sal-emp-modal').style.dis
 async function saveSalEmp() {
   const id = document.getElementById('sem-id').value;
   const body = {
-    employee_code: document.getElementById('sem-code').value.trim(),
-    name:          document.getElementById('sem-name').value.trim(),
-    department:    document.getElementById('sem-dept').value.trim(),
-    position:      document.getElementById('sem-pos').value.trim(),
-    hire_date:     document.getElementById('sem-hire').value||null,
-    birth_date:    document.getElementById('sem-birth').value||null,
-    base_salary:   parseFloat(document.getElementById('sem-base').value)||0,
-    insured_salary:parseFloat(document.getElementById('sem-insured').value)||0,
-    staff_id:      parseInt(document.getElementById('sem-staff-id').value)||null,
-    active:        document.getElementById('sem-active').value==='1',
-    notes:         document.getElementById('sem-notes').value.trim(),
+    employee_code:  document.getElementById('sem-code').value.trim(),
+    department:     document.getElementById('sem-dept').value.trim(),
+    position_title: document.getElementById('sem-pos').value.trim(),
+    hire_date:      document.getElementById('sem-hire').value || null,
+    birth_date:     document.getElementById('sem-birth').value || null,
+    base_salary:    parseFloat(document.getElementById('sem-base').value) || 0,
+    insured_salary: parseFloat(document.getElementById('sem-insured').value) || 0,
+    salary_notes:   document.getElementById('sem-notes').value.trim(),
   };
-  if (!body.employee_code||!body.name) { showToast('代碼和姓名為必填','error'); return; }
   try {
-    const url  = id ? `/api/salary/employees/${id}` : '/api/salary/employees';
-    const meth = id ? 'PUT' : 'POST';
-    const res  = await fetch(url,{method:meth,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const res  = await fetch(`/api/salary/employees/${id}`, {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
     const data = await res.json();
-    if (data.error) { showToast(data.error,'error'); return; }
+    if (data.error) { showToast(data.error, 'error'); return; }
     closeSalEmpModal();
-    showToast(id?'已更新':'員工已新增','success');
+    showToast('薪資設定已儲存', 'success');
     await loadSalEmps();
   } catch(e) { showToast('儲存失敗','error'); }
-}
-async function deleteSalEmp(id) {
-  if (!confirm('確定刪除此員工？其薪資記錄也會一併刪除。')) return;
-  await fetch(`/api/salary/employees/${id}`,{method:'DELETE'});
-  showToast('已刪除','success');
-  await loadSalEmps();
 }
 
 // ── Components ────────────────────────────────────────────────
