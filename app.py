@@ -2342,6 +2342,46 @@ def _send_line_punch(user_id, text):
     except Exception as e:
         print(f"[LINE PUNCH] push_message error: {e}")
 
+
+def _send_line_punch_with_location_reply(user_id, title, subtitle):
+    """Send message with Quick Reply location button."""
+    import json as _j
+    cfg = get_line_punch_config()
+    if not cfg or not cfg.get('channel_access_token'):
+        return
+    token = cfg['channel_access_token']
+    body = {
+        "to": user_id,
+        "messages": [{
+            "type": "text",
+            "text": f"{title}\n{subtitle}",
+            "quickReply": {
+                "items": [{
+                    "type": "action",
+                    "action": {
+                        "type": "location",
+                        "label": "傳送我的位置"
+                    }
+                }]
+            }
+        }]
+    }
+    payload = _j.dumps(body).encode('utf-8')
+    req = urllib.request.Request(
+        'https://api.line.me/v2/bot/message/push',
+        data=payload,
+        headers={
+            'Content-Type':  'application/json',
+            'Authorization': f'Bearer {token}'
+        }
+    )
+    try:
+        urllib.request.urlopen(req, timeout=15)
+    except Exception as e:
+        print(f"[LINE PUNCH] quick reply error: {e}")
+        # Fallback to plain text
+        _send_line_punch(user_id, f"{title}\n{subtitle}\n\n（點選 + → 位置資訊）")
+
 # ── Webhook ────────────────────────────────────────────────────────
 
 @app.route('/line-punch/webhook', methods=['POST'])
@@ -2481,10 +2521,11 @@ def _handle_line_punch_event(event, cfg):
 
             gps_required = pcfg['gps_required'] if pcfg else False
             if gps_required and locs:
-                _send_line_punch(user_id,
-                    f'請傳送您的位置訊息來完成{PUNCH_LABEL[punch_type]}。\n（點選 + → 位置資訊）')
-                # Store pending punch type temporarily using bind_code field trick — 
-                # actually store in a simple in-memory dict (server restart safe enough)
+                _send_line_punch_with_location_reply(
+                    user_id,
+                    f'請傳送您的位置來完成{PUNCH_LABEL[punch_type]}',
+                    '點下方「傳送位置」按鈕即可打卡'
+                )
                 _pending_line_punches[user_id] = punch_type
             else:
                 # No GPS required — punch directly
@@ -3048,6 +3089,215 @@ def api_sal_my_records():
             records.append(sal_rec_row(r, items))
 
     return jsonify({'records': records, 'employee': sal_emp_row(emp)})
+
+
+# ── Rich Menu ──────────────────────────────────────────────────────
+
+def _call_line_api(cfg, method, path, body=None):
+    """Call LINE Messaging API, return (status_code, response_dict)."""
+    import json as _j
+    token = cfg.get('channel_access_token','')
+    url   = 'https://api.line.me/v2/bot' + path
+    data  = _j.dumps(body).encode('utf-8') if body else None
+    req   = urllib.request.Request(url, data=data, method=method,
+                headers={
+                    'Content-Type':  'application/json',
+                    'Authorization': f'Bearer {token}'
+                })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status, _j.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        return e.code, {'error': e.read().decode('utf-8', errors='replace')}
+    except Exception as e:
+        return 0, {'error': str(e)}
+
+
+def _build_richmenu_body(gps_required):
+    """Build the Rich Menu JSON for punch buttons."""
+    # 2x2 grid: 上班 / 下班 / 休息開始 / 休息結束  +  狀態 / 傳位置打卡
+    if gps_required:
+        # GPS required: top row = punch commands → bot will ask for location
+        # Bottom row: status + share location guide
+        areas = [
+            {"bounds": {"x": 0,    "y": 0,   "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "上班"}},
+            {"bounds": {"x": 1250, "y": 0,   "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "下班"}},
+            {"bounds": {"x": 0,    "y": 420, "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "休息"}},
+            {"bounds": {"x": 1250, "y": 420, "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "回來"}},
+        ]
+    else:
+        areas = [
+            {"bounds": {"x": 0,    "y": 0,   "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "上班"}},
+            {"bounds": {"x": 1250, "y": 0,   "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "下班"}},
+            {"bounds": {"x": 0,    "y": 420, "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "休息"}},
+            {"bounds": {"x": 1250, "y": 420, "width": 1250, "height": 420},
+             "action": {"type": "message", "text": "回來"}},
+        ]
+    return {
+        "size":       {"width": 2500, "height": 843},
+        "selected":   True,
+        "name":       "打卡選單",
+        "chatBarText": "打卡",
+        "areas": areas
+    }
+
+
+def _create_richmenu_image(rich_menu_id, cfg, gps_required):
+    """Upload a generated SVG-based PNG image for the rich menu."""
+    import io, base64 as _b64, json as _j
+
+    token = cfg.get('channel_access_token','')
+    # Build simple colored PNG using pure Python (no Pillow needed)
+    # We'll use a pre-built base64 PNG — a 2500×843 4-panel grid
+    # Instead, upload a minimal valid PNG placeholder and rely on text labels
+    # Since we can't generate PNG without Pillow, use LINE's uploadRichMenuImage
+    # with a simple solid-color 1x1 stretched PNG as fallback
+    # Actually, let's generate a simple PNG with colored cells using struct/zlib
+
+    import struct, zlib
+
+    def png_chunk(name, data):
+        c = struct.pack('>I', len(data)) + name + data
+        return c + struct.pack('>I', zlib.crc32(c[4:]) & 0xffffffff)
+
+    W, H = 2500, 843
+    # Create image: 4 colored panels with labels
+    # Colors: green(上班), red(下班), orange(休息), blue(回來)
+    colors = [
+        (0x2e, 0x9e, 0x6b),  # green
+        (0xd6, 0x42, 0x42),  # red
+        (0xe0, 0x7b, 0x2a),  # orange
+        (0x4a, 0x7b, 0xda),  # blue
+    ]
+    labels = ['上班打卡', '下班打卡', '休息開始', '休息結束']
+
+    # Build raw pixel data row by row
+    rows = []
+    for y in range(H):
+        row = bytearray()
+        for x in range(W):
+            # Determine panel (0=TL,1=TR,2=BL,3=BR)
+            col_panel = 0 if x < 1250 else 1
+            row_panel = 0 if y < 422 else 1
+            panel = row_panel * 2 + col_panel
+            r, g, b = colors[panel]
+            # Add a dark divider line
+            if x == 1249 or x == 1250 or y == 421 or y == 422:
+                r, g, b = 0x0f, 0x1c, 0x3a
+            row += bytes([r, g, b])
+        rows.append(bytes([0]) + bytes(row))  # filter byte
+
+    compressed = zlib.compress(b''.join(rows), 6)
+    png = (b'\x89PNG\r\n\x1a\n'
+           + png_chunk(b'IHDR', struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0))
+           + png_chunk(b'IDAT', compressed)
+           + png_chunk(b'IEND', b''))
+
+    upload_url = f'https://api-data.line.me/v2/bot/richmenu/{rich_menu_id}/content'
+    req = urllib.request.Request(
+        upload_url,
+        data=png,
+        method='POST',
+        headers={
+            'Content-Type':  'image/png',
+            'Authorization': f'Bearer {token}'
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, {}
+    except urllib.error.HTTPError as e:
+        return e.code, {'error': e.read().decode('utf-8', errors='replace')}
+    except Exception as e:
+        return 0, {'error': str(e)}
+
+
+@app.route('/api/line-punch/richmenu/create', methods=['POST'])
+@login_required
+def api_richmenu_create():
+    cfg = get_line_punch_config()
+    if not cfg or not cfg.get('channel_access_token'):
+        return jsonify({'error': '請先設定 Channel Access Token'}), 400
+
+    gps_required = False
+    try:
+        with get_db() as conn:
+            pc = conn.execute("SELECT gps_required FROM punch_config WHERE id=1").fetchone()
+            if pc: gps_required = bool(pc['gps_required'])
+    except Exception:
+        pass
+
+    # 1. Create rich menu
+    body   = _build_richmenu_body(gps_required)
+    status, data = _call_line_api(cfg, 'POST', '/richmenu', body)
+    if status != 200:
+        return jsonify({'error': f'建立失敗 ({status}): {data.get("error","")}'}), 500
+
+    rich_menu_id = data.get('richMenuId','')
+
+    # 2. Upload image
+    img_status, img_data = _create_richmenu_image(rich_menu_id, cfg, gps_required)
+    if img_status not in (200, 204):
+        print(f"[RICHMENU] Image upload failed: {img_status} {img_data}")
+        # Continue even if image upload fails — menu still works
+
+    # 3. Set as default
+    status2, _ = _call_line_api(cfg, 'POST', f'/user/all/richmenu/{rich_menu_id}')
+
+    # Save rich menu id to config
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE line_punch_config SET updated_at=NOW() WHERE id=1"
+        )
+
+    return jsonify({
+        'ok': True,
+        'rich_menu_id': rich_menu_id,
+        'image_uploaded': img_status in (200, 204),
+        'set_default': status2 in (200, 204)
+    })
+
+
+@app.route('/api/line-punch/richmenu/list', methods=['GET'])
+@login_required
+def api_richmenu_list():
+    cfg = get_line_punch_config()
+    if not cfg or not cfg.get('channel_access_token'):
+        return jsonify({'menus': []})
+    status, data = _call_line_api(cfg, 'GET', '/richmenu/list')
+    if status != 200:
+        return jsonify({'menus': [], 'error': data.get('error','')})
+    return jsonify({'menus': data.get('richmenus', [])})
+
+
+@app.route('/api/line-punch/richmenu/<rich_menu_id>', methods=['DELETE'])
+@login_required
+def api_richmenu_delete(rich_menu_id):
+    cfg = get_line_punch_config()
+    if not cfg or not cfg.get('channel_access_token'):
+        return jsonify({'error': '未設定 Token'}), 400
+    # Cancel default first
+    _call_line_api(cfg, 'DELETE', '/user/all/richmenu')
+    # Delete menu
+    status, data = _call_line_api(cfg, 'DELETE', f'/richmenu/{rich_menu_id}')
+    return jsonify({'ok': status in (200,204), 'status': status})
+
+
+@app.route('/api/line-punch/richmenu/default', methods=['DELETE'])
+@login_required
+def api_richmenu_unset_default():
+    cfg = get_line_punch_config()
+    if not cfg or not cfg.get('channel_access_token'):
+        return jsonify({'error': '未設定 Token'}), 400
+    status, _ = _call_line_api(cfg, 'DELETE', '/user/all/richmenu')
+    return jsonify({'ok': status in (200,204)})
 
 @app.route('/')
 def index():

@@ -953,6 +953,33 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
         <!-- 右：說明 + 員工綁定 -->
         <div>
+          <!-- Rich Menu Card -->
+          <div class="card" style="padding:20px;margin-bottom:14px">
+            <div class="card-title" style="padding:0;margin-bottom:4px">圖文選單（快速打卡按鈕）</div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:14px">員工聊天室底部顯示四個打卡按鈕，點一下即打卡</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+              <button class="btn btn-primary btn-sm" onclick="createRichMenu()">建立圖文選單</button>
+              <button class="btn btn-outline btn-sm" onclick="loadRichMenus()">查看現有選單</button>
+              <button class="btn btn-ghost btn-sm" onclick="unsetRichMenu()">取消預設選單</button>
+            </div>
+            <div id="rm-msg" style="font-size:12px;min-height:16px;margin-bottom:10px"></div>
+            <div id="rm-list" style="display:none">
+              <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.08em">現有圖文選單</div>
+              <div id="rm-list-body"></div>
+            </div>
+            <!-- Preview -->
+            <div style="margin-top:12px;padding:12px;background:var(--bg);border-radius:8px">
+              <div style="font-size:11px;color:var(--muted);margin-bottom:8px">選單預覽</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;max-width:280px">
+                <div style="padding:12px;border-radius:6px;background:#2e9e6b;color:#fff;text-align:center;font-size:12px;font-weight:700">上班打卡</div>
+                <div style="padding:12px;border-radius:6px;background:#d64242;color:#fff;text-align:center;font-size:12px;font-weight:700">下班打卡</div>
+                <div style="padding:12px;border-radius:6px;background:#e07b2a;color:#fff;text-align:center;font-size:12px;font-weight:700">休息開始</div>
+                <div style="padding:12px;border-radius:6px;background:#4a7bda;color:#fff;text-align:center;font-size:12px;font-weight:700">休息結束</div>
+              </div>
+              <div style="font-size:10px;color:var(--muted);margin-top:6px">點擊後自動送出打卡指令，若需 GPS 驗證會提示傳送位置</div>
+            </div>
+          </div>
+
           <div class="card" style="padding:20px;margin-bottom:14px">
             <div class="card-title" style="padding:0;margin-bottom:12px">設定步驟</div>
             <div style="font-size:12px;color:var(--text);line-height:2.2;counter-reset:step">
@@ -4371,6 +4398,65 @@ async function deleteSalComp(id) {
   await fetch(`/api/salary/components/${id}`,{method:'DELETE'});
   showToast('已刪除','success');
   await loadSalComps();
+}
+
+
+// ── 圖文選單管理 ───────────────────────────────────────────────
+async function createRichMenu() {
+  const msg = document.getElementById('rm-msg');
+  msg.style.color = 'var(--accent)';
+  msg.textContent = '建立中，請稍候...';
+  try {
+    const res  = await fetch('/api/line-punch/richmenu/create', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = '建立失敗：' + (data.error || '');
+      return;
+    }
+    msg.style.color = 'var(--green)';
+    msg.textContent = `圖文選單已建立！ID：${data.rich_menu_id}${data.image_uploaded ? '' : '（圖片上傳失敗，選單仍可使用）'}`;
+    showToast('圖文選單建立成功，員工重新開啟聊天即可看到', 'success');
+    await loadRichMenus();
+  } catch(e) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = '網路錯誤：' + e.message;
+  }
+}
+
+async function loadRichMenus() {
+  const res  = await fetch('/api/line-punch/richmenu/list');
+  const data = await res.json();
+  const wrap = document.getElementById('rm-list');
+  const body = document.getElementById('rm-list-body');
+  wrap.style.display = '';
+  if (!data.menus || !data.menus.length) {
+    body.innerHTML = '<div style="font-size:12px;color:var(--muted)">目前沒有圖文選單</div>';
+    return;
+  }
+  body.innerHTML = data.menus.map(m => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);gap:8px">
+      <div>
+        <div style="font-size:12px;font-weight:600">${escHtml(m.richMenu?.name || '未命名')}</div>
+        <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--muted)">${m.richMenuId}</div>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="deleteRichMenu('${m.richMenuId}')">刪除</button>
+    </div>`).join('');
+}
+
+async function deleteRichMenu(id) {
+  if (!confirm('確定刪除此圖文選單？員工聊天室的按鈕會消失。')) return;
+  const res  = await fetch(`/api/line-punch/richmenu/${id}`, { method: 'DELETE' });
+  const data = await res.json();
+  showToast(data.ok ? '已刪除' : '刪除失敗', data.ok ? 'success' : 'error');
+  await loadRichMenus();
+}
+
+async function unsetRichMenu() {
+  if (!confirm('確定取消預設圖文選單？')) return;
+  const res  = await fetch('/api/line-punch/richmenu/default', { method: 'DELETE' });
+  const data = await res.json();
+  showToast(data.ok ? '已取消預設選單' : '操作失敗', data.ok ? 'success' : 'error');
 }
 
 </script>
