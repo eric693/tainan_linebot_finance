@@ -3673,6 +3673,7 @@ const SCHED_STATUS_COLOR = {
 };
 const WEEKDAY_ZH = ['日','一','二','三','四','五','六'];
 let schedReviewId = null;
+let schedReqData   = [];
 let schedCurMonth = null;
 
 function initSched() {
@@ -3763,6 +3764,7 @@ async function loadSchedRequests() {
 }
 
 function renderSchedRequests(list) {
+  schedReqData = list;  // store for lookup by id
   const wrap = document.getElementById('sched-req-list');
   if (!list.length) {
     wrap.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--muted)">無符合申請</div>';
@@ -3786,7 +3788,7 @@ function renderSchedRequests(list) {
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:12px;font-weight:700;color:${statusColor}">${statusLabel}</span>
-          ${canReview ? `<button class="btn btn-primary btn-sm" onclick="openSchedReview(${r.id},'${escHtml(r.staff_name||'')}','${r.month}',${JSON.stringify(r.dates||[])})">審核</button>` : ''}
+          ${canReview ? `<button class="btn btn-primary btn-sm" data-rid="${r.id}" onclick="openSchedReviewById(this)">審核</button>` : ''}
           <button class="btn btn-danger btn-sm" onclick="deleteSchedRequest(${r.id})">刪除</button>
         </div>
       </div>
@@ -3797,6 +3799,13 @@ function renderSchedRequests(list) {
       </div>
     </div>`;
   }).join('');
+}
+
+function openSchedReviewById(btn) {
+  const id = parseInt(btn.getAttribute('data-rid'));
+  const r  = schedReqData && schedReqData.find(x => x.id === id);
+  if (!r) { showToast('找不到申請資料，請重新整理', 'error'); return; }
+  openSchedReview(r.id, r.staff_name || '', r.month, r.dates || []);
 }
 
 function openSchedReview(id, name, month, dates) {
