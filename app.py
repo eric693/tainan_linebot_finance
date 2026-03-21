@@ -3283,42 +3283,73 @@ def _make_richmenu_png():
     draw = ImageDraw.Draw(img)
 
     panels = [
-        (0,    0,   1250, 421, '#2e9e6b', '上班打卡'),
-        (1250, 0,   2500, 421, '#d64242', '下班打卡'),
-        (0,    422, 1250, 843, '#e07b2a', '休息開始'),
-        (1250, 422, 2500, 843, '#4a7bda', '休息結束'),
+        (0,    0,   1250, 421, '#2e9e6b', 'Clock In'),
+        (1250, 0,   2500, 421, '#d64242', 'Clock Out'),
+        (0,    422, 1250, 843, '#e07b2a', 'Break Out'),
+        (1250, 422, 2500, 843, '#4a7bda', 'Break In'),
     ]
 
-    font_path = _find_cjk_font()
-    SIZE = 180
-    font_zh = None
-    if font_path:
-        try:
-            font_zh = ImageFont.truetype(font_path, SIZE)
-        except Exception as e:
-            print(f"[RICHMENU] truetype load failed: {e}")
+    import os
 
-    if not font_zh:
-        # Last resort: embed a minimal subset via Pillow's built-in
-        # Use a large default and accept ASCII-only
+    def _get_font(size):
+        # 1. Check common system paths
+        SYS_PATHS = [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+            '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
+            '/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf',
+            '/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf',
+        ]
+        for fp in SYS_PATHS:
+            if os.path.exists(fp):
+                try:
+                    f = ImageFont.truetype(fp, size)
+                    print(f"[RICHMENU] System font: {fp}")
+                    return f
+                except Exception:
+                    pass
+
+        # 2. Download DejaVu Bold from GitHub (open-source, ~300KB)
+        cached = '/tmp/DejaVuSans-Bold.ttf'
+        if not os.path.exists(cached):
+            try:
+                url = 'https://github.com/dejavu-fonts/dejavu-fonts/raw/main/ttf/DejaVuSans-Bold.ttf'
+                print(f"[RICHMENU] Downloading font from {url}")
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = resp.read()
+                with open(cached, 'wb') as fh:
+                    fh.write(data)
+                print(f"[RICHMENU] Font downloaded: {len(data)} bytes")
+            except Exception as e:
+                print(f"[RICHMENU] Font download failed: {e}")
+
+        if os.path.exists(cached):
+            try:
+                f = ImageFont.truetype(cached, size)
+                print(f"[RICHMENU] Downloaded font loaded")
+                return f
+            except Exception as e:
+                print(f"[RICHMENU] Downloaded font load failed: {e}")
+
+        # 3. Last resort: Pillow default (will look like boxes for large sizes)
+        print("[RICHMENU] WARNING: Using Pillow default bitmap font")
         try:
-            font_zh = ImageFont.load_default(size=SIZE)
+            return ImageFont.load_default(size=size)
         except Exception:
-            font_zh = ImageFont.load_default()
-        print("[RICHMENU] Using default font (no CJK support)")
+            return ImageFont.load_default()
+
+    font = _get_font(200)
 
     DIVIDER = 6
-    for x1, y1, x2, y2, color, zh in panels:
+    for x1, y1, x2, y2, color, label in panels:
         draw.rectangle([x1 + DIVIDER//2, y1 + DIVIDER//2,
                         x2 - DIVIDER//2 - 1, y2 - DIVIDER//2 - 1], fill=color)
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
-        try:
-            bb = draw.textbbox((0, 0), zh, font=font_zh)
-            tw, th = bb[2] - bb[0], bb[3] - bb[1]
-            draw.text((cx - tw // 2, cy - th // 2), zh, fill='#ffffff', font=font_zh)
-        except Exception as e:
-            print(f"[RICHMENU] draw text error: {e}")
+        bb = draw.textbbox((0, 0), label, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        draw.text((cx - tw // 2, cy - th // 2), label, fill='#ffffff', font=font)
 
     draw.rectangle([1248, 0, 1252, H], fill='#0f1c3a')
     draw.rectangle([0, 419, W, 423],   fill='#0f1c3a')
