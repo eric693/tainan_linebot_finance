@@ -1312,7 +1312,8 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <div class="modal-body" id="srm2-body"></div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeSalRecModal()">取消</button>
-      <button class="btn btn-outline" onclick="printCurrentSlip()">列印薪資單</button>
+      <button class="btn btn-outline" onclick="printCurrentSlip()">列印</button>
+      <button class="btn btn-outline" onclick="downloadSlipPDF()">下載 PDF</button>
       <button class="btn btn-primary" onclick="saveSalRecord()">儲存</button>
     </div>
   </div>
@@ -4188,67 +4189,272 @@ async function deleteSalRec(rid) {
 }
 
 // ── Print slip ────────────────────────────────────────────────
-function printCurrentSlip() {
-  if (!salEditRec) return;
-  const d = salEditRec;
-  const items = salEditRec._items;
-  const gross  = items.filter(i=>i.comp_type==='allowance').reduce((s,i)=>s+(parseFloat(i.amount)||0),0);
-  const deduct = items.filter(i=>i.comp_type==='deduction').reduce((s,i)=>s+(parseFloat(i.amount)||0),0);
-  const net    = gross - deduct;
-  const month = d.month || document.getElementById('sal-month').value;
+function _getSlipData() {
+  if (!salEditRec) return null;
+  const d     = salEditRec;
+  const items = salEditRec._items || [];
+  const allows  = items.filter(i=>i.comp_type==='allowance');
+  const deducts = items.filter(i=>i.comp_type==='deduction');
+  const gross   = allows.reduce((s,i)=>s+(parseFloat(i.amount)||0),0);
+  const deduct  = deducts.reduce((s,i)=>s+(parseFloat(i.amount)||0),0);
+  const net     = gross - deduct;
+  const month   = d.month || document.getElementById('sal-month').value;
   const payDate = document.getElementById('srm2-paydate').value || '';
-
-  const win = window.open('','_blank','width=700,height=900');
-  win.document.write(buildSlipHTML(d.employee_code, d.emp_name, d.department||'', d.position||'',
-    month, payDate, items.filter(i=>i.comp_type==='allowance'),
-    items.filter(i=>i.comp_type==='deduction'), gross, deduct, net));
-  win.document.close();
-  win.focus();
-  setTimeout(()=>win.print(), 500);
+  return { d, allows, deducts, gross, deduct, net, month, payDate };
 }
 
-function buildSlipHTML(code, name, dept, pos, month, payDate, allows, deducts, gross, deduct, net) {
+function printCurrentSlip() {
+  const sd = _getSlipData(); if (!sd) return;
+  const { d, allows, deducts, gross, deduct, net, month, payDate } = sd;
+  const win = window.open('','_blank','width=750,height=1000');
+  win.document.write(buildSlipHTML(
+    d.employee_code, d.emp_name, d.department||'', d.position||'',
+    month, payDate, allows, deducts, gross, deduct, net));
+  win.document.close();
+  win.focus();
+  setTimeout(()=>win.print(), 600);
+}
+
+async function downloadSlipPDF() {
+  const sd = _getSlipData(); if (!sd) return;
+  const { d, allows, deducts, gross, deduct, net, month, payDate } = sd;
+  const slipHTML = buildSlipHTML(
+    d.employee_code, d.emp_name, d.department||'', d.position||'',
+    month, payDate, allows, deducts, gross, deduct, net, true);
+
+  // Open in iframe, trigger browser print-to-PDF
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:800px;height:1100px;border:none';
+  document.body.appendChild(iframe);
+  iframe.contentDocument.open();
+  iframe.contentDocument.write(slipHTML);
+  iframe.contentDocument.close();
+  await new Promise(r=>setTimeout(r,800));
+  iframe.contentWindow.focus();
+  iframe.contentWindow.print();
+  setTimeout(()=>document.body.removeChild(iframe), 3000);
+}
+
+function buildSlipHTML(code, name, dept, pos, month, payDate, allows, deducts, gross, deduct, net, forPDF=false) {
   const yr = month ? month.slice(0,4) : '';
   const mo = month ? month.slice(5,7) : '';
-  const aRows = allows.map(i=>`<tr><td>${escHtml(i.component_name)}</td><td style="text-align:right">$${Number(i.amount||0).toLocaleString()}</td><td>${escHtml(i.note||'')}</td></tr>`).join('');
-  const dRows = deducts.map(i=>`<tr><td>${escHtml(i.component_name)}</td><td style="text-align:right">$${Number(i.amount||0).toLocaleString()}</td><td></td></tr>`).join('');
-  return `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8">
-  <title>薪資單 ${name} ${month}</title>
-  <style>body{font-family:"Noto Sans TC",sans-serif;padding:32px;color:#1e2a45;max-width:600px;margin:0 auto}
-  h2{text-align:center;margin-bottom:20px;font-size:18px}
-  .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid #999;margin-bottom:16px}
-  .info-cell{padding:7px 12px;border:1px solid #ccc;font-size:13px}
-  .info-label{font-size:11px;color:#666;margin-bottom:2px}
-  .totals{display:flex;gap:0;border:1px solid #999;margin-bottom:16px;text-align:center}
-  .total-cell{flex:1;padding:10px;border-right:1px solid #ccc;font-size:13px}
-  .total-cell:last-child{border-right:none}
-  .total-val{font-size:18px;font-weight:700;font-family:monospace;margin-top:4px}
-  table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px}
-  th{background:#f0f2f8;padding:8px 10px;border:1px solid #ccc;text-align:left}
-  td{padding:7px 10px;border:1px solid #ddd}
-  .section-title{background:#0f1c3a;color:#fff;padding:7px 12px;font-size:13px;font-weight:700;margin-bottom:0}
-  @media print{body{padding:16px}button{display:none}}</style></head><body>
-  <h2>${yr}/${mo} 薪資明細表</h2>
-  <div class="info-grid">
-    <div class="info-cell"><div class="info-label">員工代碼</div>${escHtml(code)}</div>
-    <div class="info-cell"><div class="info-label">姓名</div>${escHtml(name)}</div>
-    <div class="info-cell"><div class="info-label">部門</div>${escHtml(dept)}</div>
-    <div class="info-cell"><div class="info-label">支付日期</div>${payDate||'—'}</div>
-  </div>
-  <div class="totals">
-    <div class="total-cell"><div>支付總額</div><div class="total-val">$${gross.toLocaleString()}</div></div>
-    <div class="total-cell"><div>扣除總額</div><div class="total-val">$${deduct.toLocaleString()}</div></div>
-    <div class="total-cell" style="background:#edfaf4"><div>實支付額</div><div class="total-val" style="color:#2e9e6b">$${net.toLocaleString()}</div></div>
-  </div>
-  <div class="section-title">津貼項目</div>
-  <table><thead><tr><th>項目名稱</th><th style="text-align:right">金額</th><th>說明</th></tr></thead>
-  <tbody>${aRows}</tbody>
-  <tfoot><tr style="font-weight:700"><td>合計</td><td style="text-align:right">$${gross.toLocaleString()}</td><td></td></tr></tfoot></table>
-  <div class="section-title">扣除項目</div>
-  <table><thead><tr><th>項目名稱</th><th style="text-align:right">金額</th><th>說明</th></tr></thead>
-  <tbody>${dRows}</tbody>
-  <tfoot><tr style="font-weight:700"><td>合計</td><td style="text-align:right">$${deduct.toLocaleString()}</td><td></td></tr></tfoot></table>
-  </body></html>`;
+
+  // Allowance rows with note column
+  const aRows = allows.map(i=>`
+    <tr>
+      <td class="item-name">${escHtml(i.component_name)}</td>
+      <td class="item-amt">${Number(i.amount||0).toLocaleString()}</td>
+      <td class="item-note">${escHtml(i.note||'')}</td>
+    </tr>`).join('');
+
+  // Deduction rows
+  const dRows = deducts.map(i=>`
+    <tr>
+      <td class="item-name">${escHtml(i.component_name)}</td>
+      <td class="item-amt">${Number(i.amount||0).toLocaleString()}</td>
+      <td class="item-note"></td>
+    </tr>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>${yr}/${mo} 薪資單 ${name}</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    font-size: 13px;
+    color: #1e2a45;
+    background: #fff;
+    padding: 36px 40px;
+    max-width: 680px;
+    margin: 0 auto;
+  }
+  h1 {
+    text-align: center;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    margin-bottom: 20px;
+  }
+
+  /* Info table */
+  .info-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 14px;
+  }
+  .info-table td {
+    border: 1px solid #aaa;
+    padding: 7px 14px;
+    width: 25%;
+  }
+  .info-label {
+    background: #f0f2f8;
+    font-weight: 700;
+    text-align: center;
+    width: 15%;
+  }
+  .info-val { width: 35%; }
+
+  /* Summary bar */
+  .summary {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+  }
+  .summary td {
+    border: 1px solid #aaa;
+    text-align: center;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+  .summary .s-label { background: #f0f2f8; font-weight: 700; width: 16%; }
+  .summary .s-val   { font-family: monospace; font-size: 15px; font-weight: 700; width: 17%; }
+  .summary .s-net   { color: #2e9e6b; }
+
+  /* Section items table */
+  .section-head {
+    background: #0f1c3a;
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    padding: 6px 12px;
+    margin-top: 12px;
+    margin-bottom: 0;
+  }
+  .items {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 0;
+  }
+  .items th {
+    background: #e8ecf5;
+    border: 1px solid #aaa;
+    padding: 6px 12px;
+    text-align: left;
+    font-weight: 700;
+  }
+  .items th.right, .items td.right { text-align: right; }
+  .items td {
+    border: 1px solid #ccc;
+    padding: 6px 12px;
+  }
+  .item-name { width: 45%; }
+  .item-amt  { width: 25%; text-align: right; font-family: monospace; }
+  .item-note { width: 30%; color: #666; }
+  .items tfoot td {
+    border-top: 2px solid #aaa;
+    font-weight: 700;
+    background: #f8f9fb;
+  }
+
+  /* Signature area */
+  .sig-area {
+    margin-top: 28px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #666;
+  }
+  .sig-box {
+    text-align: center;
+    width: 30%;
+  }
+  .sig-line {
+    border-bottom: 1px solid #999;
+    height: 36px;
+    margin-bottom: 4px;
+  }
+  @media print {
+    body { padding: 20px 28px; }
+    button { display: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<h1>${yr}/${mo} 薪資明細表</h1>
+
+<!-- Employee info -->
+<table class="info-table">
+  <tr>
+    <td class="info-label">職員代碼</td>
+    <td class="info-val">${escHtml(code||'—')}</td>
+    <td class="info-label">姓名</td>
+    <td class="info-val">${escHtml(name)}</td>
+  </tr>
+  <tr>
+    <td class="info-label">部門</td>
+    <td class="info-val">${escHtml(dept||'—')}</td>
+    <td class="info-label">支付日期</td>
+    <td class="info-val">${payDate||'—'}</td>
+  </tr>
+</table>
+
+<!-- Summary -->
+<table class="summary">
+  <tr>
+    <td class="s-label">支付總額</td>
+    <td class="s-val">${gross.toLocaleString()}</td>
+    <td class="s-label">扣除總額</td>
+    <td class="s-val">${deduct.toLocaleString()}</td>
+    <td class="s-label">實支付額</td>
+    <td class="s-val s-net">${net.toLocaleString()}</td>
+  </tr>
+</table>
+
+<!-- Allowances -->
+<div class="section-head">津貼項目名稱</div>
+<table class="items">
+  <thead>
+    <tr>
+      <th class="item-name">津貼項目名稱</th>
+      <th class="item-amt right">金額</th>
+      <th class="item-note">計算明細</th>
+    </tr>
+  </thead>
+  <tbody>${aRows || '<tr><td colspan="3" style="text-align:center;color:#aaa">（無）</td></tr>'}</tbody>
+  <tfoot>
+    <tr>
+      <td style="text-align:center">合計</td>
+      <td class="item-amt">${gross.toLocaleString()}</td>
+      <td></td>
+    </tr>
+  </tfoot>
+</table>
+
+<!-- Deductions -->
+<div class="section-head">扣除項目名稱</div>
+<table class="items">
+  <thead>
+    <tr>
+      <th class="item-name">扣除項目名稱</th>
+      <th class="item-amt right">金額</th>
+      <th class="item-note">計算明細</th>
+    </tr>
+  </thead>
+  <tbody>${dRows || '<tr><td colspan="3" style="text-align:center;color:#aaa">（無）</td></tr>'}</tbody>
+  <tfoot>
+    <tr>
+      <td style="text-align:center">合計</td>
+      <td class="item-amt">${deduct.toLocaleString()}</td>
+      <td></td>
+    </tr>
+  </tfoot>
+</table>
+
+<!-- Signature area -->
+<div class="sig-area">
+  <div class="sig-box"><div class="sig-line"></div>主管確認</div>
+  <div class="sig-box"><div class="sig-line"></div>人事確認</div>
+  <div class="sig-box"><div class="sig-line"></div>員工簽收</div>
+</div>
+
+</body>
+</html>`;
 }
 function escHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
