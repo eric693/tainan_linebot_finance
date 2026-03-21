@@ -212,48 +212,45 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
             休息結束<div class="p-sub">Break In</div>
           </button>
         </div>
-      </div>
-      <!-- Today log always visible in punch tab -->
-      <div class="log-section" id="today-log-wrap" style="display:none">
-        <div class="section-label">今日打卡記錄</div>
-        <div id="today-log"></div>
-      </div>
-
-      <!-- Request punch button — punch tab only -->
-      <div style="padding:10px 20px;border-top:1px solid var(--border)">
-        <button class="btn btn-outline" style="width:100%;font-size:13px" onclick="showReqPanel()">申請補打卡</button>
-      </div>
-
-      <!-- Request form (hidden by default) -->
-      <div id="req-panel" style="display:none;padding:16px 20px;border-top:1px solid var(--border)">
-        <div class="section-label" style="margin-bottom:12px">補打卡申請</div>
-        <div style="margin-bottom:10px">
-          <div class="fl">打卡類型</div>
-          <select class="fi" id="req-type" style="margin-bottom:8px">
-            <option value="in">上班打卡</option>
-            <option value="out">下班打卡</option>
-            <option value="break_out">休息開始</option>
-            <option value="break_in">休息結束</option>
-          </select>
+        <!-- Today log -->
+        <div class="log-section" id="today-log-wrap" style="display:none">
+          <div class="section-label">今日打卡記錄</div>
+          <div id="today-log"></div>
         </div>
-        <div style="margin-bottom:10px">
-          <div class="fl">補打時間</div>
-          <input class="fi" type="datetime-local" id="req-time" style="margin-bottom:8px">
+        <!-- Request punch button -->
+        <div style="padding:10px 20px;border-top:1px solid var(--border)">
+          <button class="btn btn-outline" style="width:100%;font-size:13px" onclick="showReqPanel()">申請補打卡</button>
         </div>
-        <div style="margin-bottom:14px">
-          <div class="fl">原因 *</div>
-          <input class="fi" id="req-reason" placeholder="例：忘記打卡、手機沒電" style="margin-bottom:0">
+        <!-- Request form -->
+        <div id="req-panel" style="display:none;padding:16px 20px;border-top:1px solid var(--border)">
+          <div class="section-label" style="margin-bottom:12px">補打卡申請</div>
+          <div style="margin-bottom:10px">
+            <div class="fl">打卡類型</div>
+            <select class="fi" id="req-type" style="margin-bottom:8px">
+              <option value="in">上班打卡</option>
+              <option value="out">下班打卡</option>
+              <option value="break_out">休息開始</option>
+              <option value="break_in">休息結束</option>
+            </select>
+          </div>
+          <div style="margin-bottom:10px">
+            <div class="fl">補打時間</div>
+            <input class="fi" type="datetime-local" id="req-time" style="margin-bottom:8px">
+          </div>
+          <div style="margin-bottom:14px">
+            <div class="fl">原因 *</div>
+            <input class="fi" id="req-reason" placeholder="例：忘記打卡、手機沒電" style="margin-bottom:0">
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-outline" style="flex:1" onclick="hideReqPanel()">取消</button>
+            <button class="btn btn-primary" style="flex:2" onclick="submitPunchReq()">送出申請</button>
+          </div>
+          <div id="my-reqs" style="margin-top:16px;display:none">
+            <div class="section-label" style="margin-bottom:8px">我的申請記錄</div>
+            <div id="my-reqs-list"></div>
+          </div>
         </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-outline" style="flex:1" onclick="hideReqPanel()">取消</button>
-          <button class="btn btn-primary" style="flex:2" onclick="submitPunchReq()">送出申請</button>
-        </div>
-        <!-- My requests history -->
-        <div id="my-reqs" style="margin-top:16px;display:none">
-          <div class="section-label" style="margin-bottom:8px">我的申請記錄</div>
-          <div id="my-reqs-list"></div>
-        </div>
-      </div>
+      </div><!-- end panel-punch -->
 
       <!-- ── TAB: 排休申請 ── -->
       <div id="panel-sched" class="tab-body" style="display:none">
@@ -546,12 +543,20 @@ async function loadSchedMonth(){
   schedSelectedDates=new Set();
   schedExistingReq=null;
 
-  const [cfgData,reqData]=await Promise.all([
-    fetch('/api/schedule/config/'+month).then(r=>r.json()),
-    fetch('/api/schedule/my-request/'+month).then(r=>r.json())
-  ]);
-  schedCfg=cfgData; schedOffCounts=cfgData.off_counts||{};
-  schedExistingReq=reqData;
+  try {
+    const safeJson = async(r)=>{ try{ return await r.json(); }catch(e){ return null; } };
+    const [cfgRes,reqRes]=await Promise.all([
+      fetch('/api/schedule/config/'+month).then(safeJson),
+      fetch('/api/schedule/my-request/'+month).then(safeJson)
+    ]);
+    schedCfg=cfgRes||{vacation_quota:8,max_off_per_day:2,off_counts:{}};
+    schedOffCounts=schedCfg.off_counts||{};
+    schedExistingReq=(reqRes&&reqRes.error)?null:reqRes;
+  } catch(e) {
+    schedCfg={vacation_quota:8,max_off_per_day:2,off_counts:{}};
+    schedOffCounts={};
+    schedExistingReq=null;
+  }
 
   if(schedExistingReq&&['approved','pending','modified_pending'].includes(schedExistingReq.status)){
     (schedExistingReq.dates||[]).forEach(d=>schedSelectedDates.add(d));
@@ -702,10 +707,16 @@ async function loadScheduleView(){
   const wrap=document.getElementById('schedule-view-content');
   wrap.innerHTML='<div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">載入中...</div>';
 
-  const [cfgData,reqData]=await Promise.all([
-    fetch('/api/schedule/config/'+month).then(r=>r.json()),
-    fetch('/api/schedule/my-request/'+month).then(r=>r.json())
-  ]);
+  let cfgData={vacation_quota:8,max_off_per_day:2,off_counts:{},notes:''}, reqData=null;
+  try {
+    const safeJ=async r=>{try{return await r.json();}catch(e){return null;}};
+    const [c,r]=await Promise.all([
+      fetch('/api/schedule/config/'+month).then(safeJ),
+      fetch('/api/schedule/my-request/'+month).then(safeJ)
+    ]);
+    if(c) cfgData=c;
+    if(r&&!r.error) reqData=r;
+  } catch(e) { console.error('loadScheduleView error',e); }
   const cfg=cfgData; const req=reqData;
   const [y,m]=month.split('-').map(Number);
   const daysInMonth=new Date(y,m,0).getDate();
