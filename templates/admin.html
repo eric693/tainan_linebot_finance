@@ -321,9 +321,9 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
         <table>
           <thead>
             <tr>
-              <th>日期</th><th>早餐點收</th><th>現金</th><th>刷卡合庫</th>
-              <th>LINE Pay</th><th>轉帳</th><th>櫃檯支出</th><th>熊貓</th>
-              <th>Uber Eats</th><th>小費</th><th>溢收</th><th>POS機總額</th>
+              <th>日期</th><th>交班點收</th><th>現金</th><th>刷卡</th>
+              <th>LINE Pay</th><th>轉帳</th><th>支出</th><th>入金</th>
+              <th>Uber Eats</th><th>小費</th><th>溢收</th><th>當日營業總額</th>
               <th>總收入</th><th>操作</th>
             </tr>
           </thead>
@@ -1842,18 +1842,18 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
           <input class="form-input" type="date" id="f-record_date">
         </div>
         <div class="form-section-title">早餐收入</div>
-        <div class="form-group"><label class="form-label">早餐點收</label><input class="form-input" type="number" id="f-breakfast_total" placeholder="0" oninput="updateTotal()"></div>
-        <div class="form-group"><label class="form-label">早餐餐-現金</label><input class="form-input" type="number" id="f-breakfast_cash" placeholder="0" oninput="updateTotal()"></div>
-        <div class="form-group"><label class="form-label">早餐餐-刷卡合庫</label><input class="form-input" type="number" id="f-breakfast_card" placeholder="0" oninput="updateTotal()"></div>
-        <div class="form-group"><label class="form-label">早餐餐-LINE Pay</label><input class="form-input" type="number" id="f-breakfast_linepay" placeholder="0" oninput="updateTotal()"></div>
-        <div class="form-group full-width"><label class="form-label">早餐餐-轉帳</label><input class="form-input" type="number" id="f-breakfast_transfer" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group"><label class="form-label">交班點收</label><input class="form-input" type="number" id="f-breakfast_total" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group"><label class="form-label">現金</label><input class="form-input" type="number" id="f-breakfast_cash" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group"><label class="form-label">刷卡</label><input class="form-input" type="number" id="f-breakfast_card" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group"><label class="form-label">Line pay</label><input class="form-input" type="number" id="f-breakfast_linepay" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group full-width"><label class="form-label">轉帳</label><input class="form-input" type="number" id="f-breakfast_transfer" placeholder="0" oninput="updateTotal()"></div>
         <div class="form-section-title">支出 / 其他收入</div>
-        <div class="form-group"><label class="form-label">櫃檯支出 <span class="subtract-tag">(扣除)</span></label><input class="form-input" type="number" id="f-counter_expense" placeholder="0" oninput="updateTotal()"></div>
-        <div class="form-group"><label class="form-label">熊貓</label><input class="form-input" type="number" id="f-panda" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group"><label class="form-label">支出 <span class="subtract-tag">(扣除)</span></label><input class="form-input" type="number" id="f-counter_expense" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group"><label class="form-label">入金</label><input class="form-input" type="number" id="f-panda" placeholder="0" oninput="updateTotal()"></div>
         <div class="form-group"><label class="form-label">Uber Eats</label><input class="form-input" type="number" id="f-ubereats" placeholder="0" oninput="updateTotal()"></div>
         <div class="form-group"><label class="form-label">小費</label><input class="form-input" type="number" id="f-tips" placeholder="0" oninput="updateTotal()"></div>
         <div class="form-group"><label class="form-label">溢收</label><input class="form-input" type="number" id="f-surplus" placeholder="0" oninput="updateTotal()"></div>
-        <div class="form-group"><label class="form-label">POS機總額</label><input class="form-input" type="number" id="f-pos_total" placeholder="0" oninput="updateTotal()"></div>
+        <div class="form-group"><label class="form-label">當日營業總額</label><input class="form-input" type="number" id="f-pos_total" placeholder="0" oninput="updateTotal()"></div>
         <div class="form-group full-width">
           <div class="total-preview">
             <span class="total-preview-label">預估總收入</span>
@@ -1886,17 +1886,17 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 <script>
 // ── 欄位定義 ──────────────────────────────────────────────────
 const FIELDS = [
-  { key: 'breakfast_total',    label: '早餐點收',    subtract: false },
+  { key: 'breakfast_total',    label: '交班點收',    subtract: false },
   { key: 'breakfast_cash',     label: '現金',        subtract: false },
-  { key: 'breakfast_card',     label: '刷卡合庫',    subtract: false },
-  { key: 'breakfast_linepay',  label: 'LINE Pay',    subtract: false },
+  { key: 'breakfast_card',     label: '刷卡',        subtract: false },
+  { key: 'breakfast_linepay',  label: 'Line pay',    subtract: false },
   { key: 'breakfast_transfer', label: '轉帳',        subtract: false },
-  { key: 'counter_expense',    label: '櫃檯支出',    subtract: true  },
-  { key: 'panda',              label: '熊貓',        subtract: false },
+  { key: 'counter_expense',    label: '支出',        subtract: true  },
+  { key: 'panda',              label: '入金',        subtract: false },
   { key: 'ubereats',           label: 'Uber Eats',   subtract: false },
   { key: 'tips',               label: '小費',        subtract: false },
   { key: 'surplus',            label: '溢收',        subtract: false },
-  { key: 'pos_total',          label: 'POS機總額',   subtract: false },
+  { key: 'pos_total',          label: '當日營業總額', subtract: false },
 ];
 const FIELD_KEYS    = FIELDS.map(f => f.key);
 const INCOME_FIELDS = FIELDS.filter(f => !f.subtract);
