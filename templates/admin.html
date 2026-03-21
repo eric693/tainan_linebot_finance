@@ -4733,38 +4733,51 @@ function openSalEmpModal(id) {
   const e = salEmps.find(x => x.id === id);
   if (!e) return;
   document.getElementById('sem-title').textContent = `設定薪資 — ${e.name}`;
-  document.getElementById('sem-id').value      = e.id;
-  document.getElementById('sem-code').value    = e.employee_code || '';
-  document.getElementById('sem-name').value    = e.name;
-  document.getElementById('sem-dept').value    = e.department || '';
-  document.getElementById('sem-pos').value     = e.position_title || '';
-  document.getElementById('sem-hire').value    = e.hire_date || '';
-  document.getElementById('sem-birth').value   = e.birth_date || '';
+  document.getElementById('sem-id').value           = e.id;
+  document.getElementById('sem-code').value         = e.employee_code || '';
+  document.getElementById('sem-name').value         = e.name;
+  document.getElementById('sem-dept').value         = e.department || '';
+  document.getElementById('sem-pos').value          = e.position_title || '';
+  document.getElementById('sem-hire').value         = e.hire_date || '';
+  document.getElementById('sem-birth').value        = e.birth_date || '';
   document.getElementById('sem-base').value         = e.base_salary || 0;
   document.getElementById('sem-insured').value      = e.insured_salary || 0;
   document.getElementById('sem-daily-hours').value  = e.daily_hours || 8;
   document.getElementById('sem-ot-rate1').value     = e.ot_rate1 || 1.33;
   document.getElementById('sem-ot-rate2').value     = e.ot_rate2 || 1.67;
   document.getElementById('sem-notes').value        = e.salary_notes || '';
+  // Salary type (monthly / hourly)
+  const isHourly = e.salary_type === 'hourly';
+  const typeMonthly = document.getElementById('sem-type-monthly');
+  const typeHourly  = document.getElementById('sem-type-hourly');
+  const hourlyEl    = document.getElementById('sem-hourly-rate');
+  if (typeMonthly) typeMonthly.checked = !isHourly;
+  if (typeHourly)  typeHourly.checked  =  isHourly;
+  if (hourlyEl)    hourlyEl.value      = e.hourly_rate || 0;
+  semSalaryTypeChange();
   document.getElementById('sal-emp-modal').style.display = 'flex';
 }
 function closeSalEmpModal() { document.getElementById('sal-emp-modal').style.display = 'none'; }
 
 async function saveSalEmp() {
   const id = document.getElementById('sem-id').value;
+  const isHourly = document.getElementById('sem-type-hourly')?.checked || false;
   const body = {
     employee_code:  document.getElementById('sem-code').value.trim(),
     department:     document.getElementById('sem-dept').value.trim(),
     position_title: document.getElementById('sem-pos').value.trim(),
     hire_date:      document.getElementById('sem-hire').value || null,
     birth_date:     document.getElementById('sem-birth').value || null,
-    base_salary:    parseFloat(document.getElementById('sem-base').value) || 0,
+    base_salary:    isHourly ? 0 : (parseFloat(document.getElementById('sem-base').value) || 0),
     insured_salary: parseFloat(document.getElementById('sem-insured').value) || 0,
     daily_hours:    parseFloat(document.getElementById('sem-daily-hours').value) || 8,
     ot_rate1:       parseFloat(document.getElementById('sem-ot-rate1').value) || 1.33,
     ot_rate2:       parseFloat(document.getElementById('sem-ot-rate2').value) || 1.67,
+    salary_type:    isHourly ? 'hourly' : 'monthly',
+    hourly_rate:    isHourly ? (parseFloat(document.getElementById('sem-hourly-rate')?.value) || 0) : 0,
     salary_notes:   document.getElementById('sem-notes').value.trim(),
   };
+  if (!body.employee_code) { showToast('請填寫員工代碼', 'error'); return; }
   try {
     const res  = await fetch(`/api/salary/employees/${id}`, {
       method: 'PUT', headers: {'Content-Type':'application/json'},
@@ -5548,62 +5561,7 @@ async function deleteOTReq(id) {
   document.getElementById('ot-req-count').textContent = `共 ${otReqData.length} 筆`;
 }
 
-// Patch openSalEmpModal to handle salary type
-const _origOpenSalEmpModal = openSalEmpModal;
-async function openSalEmpModal(id=null) {
-  await _origOpenSalEmpModal(id);
-  if (id) {
-    const e = salEmps.find(x=>x.id===id);
-    if (e) {
-      const isHourly = (e.salary_type === 'hourly');
-      document.getElementById('sem-type-monthly').checked = !isHourly;
-      document.getElementById('sem-type-hourly').checked  =  isHourly;
-      if (document.getElementById('sem-hourly-rate'))
-        document.getElementById('sem-hourly-rate').value = e.hourly_rate||0;
-      semSalaryTypeChange();
-    }
-  } else {
-    document.getElementById('sem-type-monthly').checked = true;
-    document.getElementById('sem-type-hourly').checked  = false;
-    if (document.getElementById('sem-hourly-rate'))
-      document.getElementById('sem-hourly-rate').value = 0;
-    semSalaryTypeChange();
-  }
-}
-
-// Patch saveSalEmp to include salary_type + hourly_rate
-const _origSaveSalEmp = saveSalEmp;
-async function saveSalEmp() {
-  // inject extra fields into body via monkey-patch on fetch
-  const isHourly = document.getElementById('sem-type-hourly').checked;
-  const _origFetch = window._salFetch || fetch;
-  // Just call original and handle in API — add to body via overriding
-  const id = document.getElementById('sem-id').value;
-  const body = {
-    employee_code:  document.getElementById('sem-code').value.trim(),
-    department:     document.getElementById('sem-dept').value.trim(),
-    position_title: document.getElementById('sem-pos').value.trim(),
-    hire_date:      document.getElementById('sem-hire').value || null,
-    birth_date:     document.getElementById('sem-birth').value || null,
-    base_salary:    isHourly ? 0 : (parseFloat(document.getElementById('sem-base').value)||0),
-    insured_salary: parseFloat(document.getElementById('sem-insured').value)||0,
-    daily_hours:    parseFloat(document.getElementById('sem-daily-hours').value)||8,
-    ot_rate1:       parseFloat(document.getElementById('sem-ot-rate1').value)||1.33,
-    ot_rate2:       parseFloat(document.getElementById('sem-ot-rate2').value)||1.67,
-    salary_notes:   document.getElementById('sem-notes').value.trim(),
-    salary_type:    isHourly ? 'hourly' : 'monthly',
-    hourly_rate:    isHourly ? (parseFloat(document.getElementById('sem-hourly-rate').value)||0) : 0,
-  };
-  if (!body.employee_code) { showToast('請填寫員工代碼','error'); return; }
-  const url  = id ? `/api/salary/employees/${id}` : '/api/salary/employees';
-  const meth = id ? 'PUT' : 'POST';
-  const res  = await fetch(url,{method:meth,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const data = await res.json();
-  if (data.error) { showToast(data.error,'error'); return; }
-  closeSalEmpModal();
-  showToast(id?'已更新':'已新增','success');
-  await loadSalEmps();
-}
+// salary type + hourly_rate merged into original functions below
 
 </script>
 </body>
