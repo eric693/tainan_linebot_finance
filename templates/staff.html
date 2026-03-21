@@ -188,6 +188,7 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
         <button class="tab active" id="tab-punch" onclick="switchTab('punch')">打卡<span class="tab-badge" id="tbadge-punch" style="display:none"></span></button>
         <button class="tab"        id="tab-sched" onclick="switchTab('sched')">排休申請<span class="tab-badge" id="tbadge-sched" style="display:none"></span></button>
         <button class="tab"        id="tab-schedule-view" onclick="switchTab('schedule-view')">我的排班</button>
+      <button class="tab"        id="tab-overtime"      onclick="switchTab('overtime')">加班申請</button>
       <button class="tab"        id="tab-attendance"    onclick="switchTab('attendance')">出勤月曆</button>
       <button class="tab"        id="tab-salary"        onclick="switchTab('salary')">薪資查詢</button>
       </div>
@@ -309,6 +310,40 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
       </div>
 
 
+      <!-- ── TAB: 加班申請 ── -->
+      <div id="panel-overtime" class="tab-body" style="display:none">
+        <div style="margin-bottom:14px;padding:10px 14px;background:var(--orange-light);border-radius:8px;border:1px solid #f5c0a0;font-size:12px;color:var(--text)">
+          <strong>勞基法加班費</strong>：前 2 小時 × 1.33、第 3 小時起 × 1.67（依個人薪資設定計算）
+        </div>
+        <!-- Submit form -->
+        <div style="background:#fff;border-radius:10px;border:1.5px solid var(--border);padding:16px;margin-bottom:16px">
+          <div class="section-label" style="margin-bottom:12px">新增加班申請</div>
+          <div style="margin-bottom:10px">
+            <div class="fl">加班日期</div>
+            <input class="fi" type="date" id="ot-date" style="margin-bottom:8px">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+            <div>
+              <div class="fl">開始時間</div>
+              <input class="fi" type="time" id="ot-start" style="margin-bottom:0">
+            </div>
+            <div>
+              <div class="fl">結束時間</div>
+              <input class="fi" type="time" id="ot-end" style="margin-bottom:0">
+            </div>
+          </div>
+          <div id="ot-hours-preview" style="font-size:12px;color:var(--accent);margin-bottom:10px;min-height:16px"></div>
+          <div style="margin-bottom:14px">
+            <div class="fl">加班原因 *</div>
+            <input class="fi" id="ot-reason" placeholder="例：客戶急件、備料作業" style="margin-bottom:0">
+          </div>
+          <button class="btn btn-primary" style="width:100%" onclick="submitOTRequest()">送出加班申請</button>
+        </div>
+        <!-- My requests list -->
+        <div class="section-label" style="margin-bottom:10px">我的申請記錄</div>
+        <div id="my-ot-list"><div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">載入中...</div></div>
+      </div>
+
       <!-- ── TAB: 出勤月曆 ── -->
       <div id="panel-attendance" class="tab-body" style="display:none">
         <div class="month-row" style="margin-bottom:14px">
@@ -429,7 +464,7 @@ function showMain(){
 }
 
 function switchTab(tab){
-  ['punch','sched','schedule-view','attendance','salary'].forEach(t=>{
+  ['punch','sched','schedule-view','overtime','attendance','salary'].forEach(t=>{
     document.getElementById('tab-'+t).classList.toggle('active',t===tab);
     document.getElementById('panel-'+t).style.display=t===tab?'':'none';
   });
@@ -449,6 +484,7 @@ function switchTab(tab){
   if(tab==='punch')    { startGPS(); loadTodayLog(); setStaffBadge('staff-badge-punch',0); }
   if(tab==='sched')    { initSchedTab(); setStaffBadge('staff-badge-sched',0); }
   if(tab==='schedule-view') initScheduleViewTab();
+  if(tab==='overtime')   initOTTab();
   if(tab==='attendance') initAttendanceTab();
   if(tab==='salary')   initSalaryTab();
 }
@@ -1184,6 +1220,94 @@ async function refreshStaffBadges() {
 
 // Clear punch badge when user opens punch tab
 // badge clear moved into real switchTab
+
+
+// ═══════════════════════════════════════════════════════════════
+// 員工加班申請
+// ═══════════════════════════════════════════════════════════════
+const OT_SL = {pending:'審核中', approved:'已核准', rejected:'已退回'};
+const OT_SC = {pending:'var(--orange)', approved:'var(--green)', rejected:'var(--red)'};
+
+function initOTTab() {
+  // Default date = today
+  const n = new Date();
+  const today = n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0');
+  if (!document.getElementById('ot-date').value)
+    document.getElementById('ot-date').value = today;
+  // Live hours preview
+  ['ot-start','ot-end'].forEach(id =>
+    document.getElementById(id).addEventListener('change', updateOTHoursPreview)
+  );
+  loadMyOTRequests();
+}
+
+function updateOTHoursPreview() {
+  const s = document.getElementById('ot-start').value;
+  const e = document.getElementById('ot-end').value;
+  const el = document.getElementById('ot-hours-preview');
+  if (!s || !e) { el.textContent = ''; return; }
+  const [sh,sm] = s.split(':').map(Number);
+  const [eh,em] = e.split(':').map(Number);
+  let mins = (eh*60+em) - (sh*60+sm);
+  if (mins <= 0) mins += 24*60;
+  const hrs = (mins/60).toFixed(1);
+  const h1  = Math.min(mins/60, 2).toFixed(1);
+  const h2  = Math.max(0, mins/60 - 2).toFixed(1);
+  el.innerHTML = `<strong>加班時數：${hrs} 小時</strong>
+    （前 ${h1}h × 1.33 + 後 ${h2}h × 1.67）`;
+}
+
+async function submitOTRequest() {
+  const request_date = document.getElementById('ot-date').value;
+  const start_time   = document.getElementById('ot-start').value;
+  const end_time     = document.getElementById('ot-end').value;
+  const reason       = document.getElementById('ot-reason').value.trim();
+  if (!request_date || !start_time || !end_time) {
+    showToast('請填寫加班日期及時間','err'); return;
+  }
+  if (!reason) { showToast('請填寫加班原因','err'); return; }
+  try {
+    const res = await fetch('/api/overtime/my-requests', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ request_date, start_time, end_time, reason })
+    });
+    const d = await res.json();
+    if (!res.ok) { showToast(d.error||'送出失敗','err'); return; }
+    showToast('加班申請已送出','ok');
+    document.getElementById('ot-reason').value = '';
+    await loadMyOTRequests();
+  } catch(e) { showToast('網路錯誤','err'); }
+}
+
+async function loadMyOTRequests() {
+  const res  = await fetch('/api/overtime/my-requests');
+  const list = await res.json();
+  const wrap = document.getElementById('my-ot-list');
+  if (!list.length) {
+    wrap.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">尚無申請記錄</div>';
+    return;
+  }
+  wrap.innerHTML = list.map(r => {
+    const sc = OT_SC[r.status]||'var(--muted)';
+    const sl = OT_SL[r.status]||r.status;
+    const payStr = r.ot_pay > 0
+      ? `<div style="font-size:13px;font-weight:700;color:var(--green);margin-top:4px">加班費：$${Number(r.ot_pay).toLocaleString()}</div>` : '';
+    return `<div style="border:1.5px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:10px">
+      <div style="padding:10px 14px;background:var(--bg);display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:13px;font-weight:700">${r.request_date}　${r.start_time}～${r.end_time}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">加班 <strong>${r.ot_hours}</strong> 小時</div>
+        </div>
+        <span style="font-size:12px;font-weight:700;color:${sc};padding:3px 10px;border-radius:10px;background:${sc}22">${sl}</span>
+      </div>
+      <div style="padding:10px 14px;font-size:12px;color:var(--text)">
+        ${esc(r.reason)}
+        ${payStr}
+        ${r.review_note?`<div style="color:${sc};margin-top:4px">意見：${esc(r.review_note)}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
 
 </script>
 </body>

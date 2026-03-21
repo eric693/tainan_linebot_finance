@@ -395,6 +395,23 @@ def init_db():
                         INSERT INTO shift_types (name,start_time,end_time,color,departments,sort_order)
                         VALUES (%s,%s,%s,%s,%s,%s)
                     """, (name, st, et, color, dept, sort))
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS overtime_requests (
+                    id              SERIAL PRIMARY KEY,
+                    staff_id        INT REFERENCES punch_staff(id) ON DELETE CASCADE,
+                    request_date    DATE NOT NULL,
+                    start_time      TIME NOT NULL,
+                    end_time        TIME NOT NULL,
+                    ot_hours        NUMERIC(5,2),
+                    reason          TEXT DEFAULT '',
+                    status          TEXT DEFAULT 'pending',
+                    reviewed_by     TEXT DEFAULT '',
+                    review_note     TEXT DEFAULT '',
+                    ot_pay          NUMERIC(12,2) DEFAULT 0,
+                    reviewed_at     TIMESTAMPTZ,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
         print("[OK] Database tables created")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -421,6 +438,11 @@ def init_db():
         "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS insured_salary NUMERIC(12,2) DEFAULT 0",
         "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS salary_notes TEXT DEFAULT ''",
         "ALTER TABLE salary_records ADD COLUMN IF NOT EXISTS staff_id INT",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS daily_hours NUMERIC(4,1) DEFAULT 8",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS ot_rate1 NUMERIC(4,2) DEFAULT 1.33",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS ot_rate2 NUMERIC(4,2) DEFAULT 1.67",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS salary_type TEXT DEFAULT 'monthly'",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(12,2) DEFAULT 0",
     ]
     for sql in migrations:
         try:
@@ -2962,8 +2984,10 @@ def api_sal_emp_update(eid):
             UPDATE punch_staff SET
               employee_code=%s, department=%s, position_title=%s,
               hire_date=%s, birth_date=%s,
-              base_salary=%s, insured_salary=%s, salary_notes=%s,
-              updated_at=NOW()
+              base_salary=%s, insured_salary=%s,
+              daily_hours=%s, ot_rate1=%s, ot_rate2=%s,
+              salary_type=%s, hourly_rate=%s,
+              salary_notes=%s, updated_at=NOW()
             WHERE id=%s RETURNING *
         """, (b.get('employee_code','').strip(),
               b.get('department','').strip(),
@@ -2972,6 +2996,11 @@ def api_sal_emp_update(eid):
               b.get('birth_date') or None,
               float(b.get('base_salary') or 0),
               float(b.get('insured_salary') or 0),
+              float(b.get('daily_hours') or 8),
+              float(b.get('ot_rate1') or 1.33),
+              float(b.get('ot_rate2') or 1.67),
+              b.get('salary_type','monthly'),
+              float(b.get('hourly_rate') or 0),
               b.get('salary_notes','').strip(),
               eid)).fetchone()
     return jsonify(sal_emp_row(row)) if row else ('', 404)
@@ -3055,16 +3084,94 @@ def api_sal_records_month(month):
             result.append(d)
     return jsonify(result)
 
+def _calc_overtime(conn, staff_id, month, base_salary, daily_hours, ot_rate1, ot_rate2):
+    """
+    Calculate overtime pay for a staff member in a given month.
+    Returns (ot_hours_1, ot_hours_2, ot_pay) where:
+      ot_hours_1 = hours at 1.33x  (first 2h/day over daily_hours)
+      ot_hours_2 = hours at 1.67x  (hours beyond first 2h overtime)
+    """
+    from datetime import timezone as _tz_ot, timedelta as _td_ot
+    TW_OT = _tz_ot(_td_ot(hours=8))
+
+    # Get all punch records for this month
+    rows = conn.execute("""
+        SELECT punch_type,
+               punched_at AT TIME ZONE 'Asia/Taipei' as punched_tw
+        FROM punch_records
+        WHERE staff_id = %s
+          AND to_char(punched_at AT TIME ZONE 'Asia/Taipei', 'YYYY-MM') = %s
+        ORDER BY punched_at ASC
+    """, (staff_id, month)).fetchall()
+
+    # Group by date, find clock_in / clock_out per day
+    from collections import defaultdict
+    daily = defaultdict(dict)
+    for r in rows:
+        dt = r['punched_tw']
+        ds = dt.strftime('%Y-%m-%d')
+        pt = r['punch_type']
+        t  = dt
+        if pt == 'in' and 'in' not in daily[ds]:
+            daily[ds]['in'] = t
+        elif pt == 'out':
+            daily[ds]['out'] = t
+        elif pt == 'break_out' and 'break_out' not in daily[ds]:
+            daily[ds]['break_out'] = t
+        elif pt == 'break_in' and 'break_in' not in daily[ds]:
+            daily[ds]['break_in'] = t
+
+    hourly_rate = float(base_salary) / (30 * float(daily_hours)) if base_salary and daily_hours else 0
+    total_ot1 = 0.0   # hours at rate1
+    total_ot2 = 0.0   # hours at rate2
+
+    for ds, times in daily.items():
+        if 'in' not in times or 'out' not in times:
+            continue
+        # Total worked hours
+        total_secs = (times['out'] - times['in']).total_seconds()
+        # Subtract break time if both recorded
+        if 'break_out' in times and 'break_in' in times:
+            break_secs = (times['break_in'] - times['break_out']).total_seconds()
+            if 0 < break_secs < 7200:   # sanity: break < 2h
+                total_secs -= break_secs
+        worked_hours = total_secs / 3600
+        if worked_hours <= 0:
+            continue
+        ot = max(0, worked_hours - float(daily_hours))
+        if ot <= 0:
+            continue
+        ot1 = min(ot, 2.0)       # first 2h → rate1
+        ot2 = max(0, ot - 2.0)   # beyond 2h → rate2
+        total_ot1 += ot1
+        total_ot2 += ot2
+
+    ot_pay = round(hourly_rate * (total_ot1 * float(ot_rate1) + total_ot2 * float(ot_rate2)), 0)
+    return round(total_ot1, 2), round(total_ot2, 2), ot_pay
+
+
 @app.route('/api/salary/records/<month>/generate', methods=['POST'])
 @login_required
 def api_sal_generate(month):
     with get_db() as conn:
+        # Ensure overtime columns exist
+        for _ot_sql in [
+            "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS daily_hours NUMERIC(4,1) DEFAULT 8",
+            "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS ot_rate1 NUMERIC(4,2) DEFAULT 1.33",
+            "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS ot_rate2 NUMERIC(4,2) DEFAULT 1.67",
+        ]:
+            try: conn.execute(_ot_sql)
+            except Exception: pass
+
         staff_list = conn.execute("""
             SELECT id, name,
                    COALESCE(employee_code,'') as employee_code,
                    COALESCE(department,'')    as department,
                    COALESCE(base_salary,0)    as base_salary,
                    COALESCE(insured_salary,0) as insured_salary,
+                   COALESCE(daily_hours,8)    as daily_hours,
+                   COALESCE(ot_rate1,1.33)    as ot_rate1,
+                   COALESCE(ot_rate2,1.67)    as ot_rate2,
                    hire_date, birth_date, active
             FROM punch_staff WHERE active=TRUE ORDER BY name
         """).fetchall()
@@ -3091,6 +3198,29 @@ def api_sal_generate(month):
                     'comp_type': comp['comp_type'], 'amount': amount,
                     'note': '生日禮金' if comp['is_birthday'] else ''
                 })
+
+            # ── Overtime calculation from punch records ──────────
+            try:
+                ot1_h, ot2_h, ot_pay = _calc_overtime(
+                    conn, staff['id'], month,
+                    staff.get('base_salary', 0),
+                    staff.get('daily_hours', 8),
+                    staff.get('ot_rate1', 1.33),
+                    staff.get('ot_rate2', 1.67)
+                )
+                if ot_pay > 0:
+                    note_parts = []
+                    if ot1_h > 0: note_parts.append(f'{ot1_h}h×{staff.get("ot_rate1",1.33)}')
+                    if ot2_h > 0: note_parts.append(f'{ot2_h}h×{staff.get("ot_rate2",1.67)}')
+                    items_data.append({
+                        'component_id': None,
+                        'component_name': '加班費',
+                        'comp_type': 'allowance',
+                        'amount': ot_pay,
+                        'note': '、'.join(note_parts)
+                    })
+            except Exception as _ot_e:
+                print(f"[OT CALC] {staff['name']}: {_ot_e}")
 
             gross  = sum(i['amount'] for i in items_data if i['comp_type'] == 'allowance')
             deduct = sum(i['amount'] for i in items_data if i['comp_type'] == 'deduction')
@@ -3960,6 +4090,213 @@ def api_my_shift_schedule():
             'note':       r['note'],
         }
     return jsonify({'month': month, 'shifts': result})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Overtime Request API
+# ═══════════════════════════════════════════════════════════════════
+
+def ot_req_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('request_date'): d['request_date'] = d['request_date'].isoformat()
+    if d.get('start_time'):   d['start_time']   = str(d['start_time'])[:5]
+    if d.get('end_time'):     d['end_time']      = str(d['end_time'])[:5]
+    if d.get('ot_pay'):       d['ot_pay']        = float(d['ot_pay'])
+    if d.get('ot_hours'):     d['ot_hours']      = float(d['ot_hours'])
+    if d.get('reviewed_at'):  d['reviewed_at']   = d['reviewed_at'].isoformat()
+    if d.get('created_at'):   d['created_at']    = d['created_at'].isoformat()
+    return d
+
+def _calc_ot_pay(staff_row, ot_hours):
+    """Calculate overtime pay based on salary type."""
+    salary_type = staff_row.get('salary_type', 'monthly') or 'monthly'
+    base_salary  = float(staff_row.get('base_salary')  or 0)
+    hourly_rate  = float(staff_row.get('hourly_rate')  or 0)
+    daily_hours  = float(staff_row.get('daily_hours')  or 8)
+    ot_rate1     = float(staff_row.get('ot_rate1')     or 1.33)
+    ot_rate2     = float(staff_row.get('ot_rate2')     or 1.67)
+
+    if salary_type == 'hourly':
+        base_hourly = hourly_rate
+    else:
+        # Monthly: hourly = monthly / 30 / daily_hours  (勞基法標準換算)
+        base_hourly = base_salary / 30 / daily_hours if (base_salary and daily_hours) else 0
+
+    if base_hourly <= 0:
+        return 0.0, base_hourly
+
+    h = float(ot_hours)
+    h1 = min(h, 2.0)            # first 2h → rate1
+    h2 = max(0.0, h - 2.0)      # beyond 2h → rate2
+    pay = round(base_hourly * (h1 * ot_rate1 + h2 * ot_rate2), 0)
+    return pay, base_hourly
+
+def _ensure_ot_cols(conn):
+    for sql in [
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS salary_type TEXT DEFAULT 'monthly'",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(12,2) DEFAULT 0",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS daily_hours NUMERIC(4,1) DEFAULT 8",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS ot_rate1 NUMERIC(4,2) DEFAULT 1.33",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS ot_rate2 NUMERIC(4,2) DEFAULT 1.67",
+    ]:
+        try: conn.execute(sql)
+        except Exception: pass
+
+# ── Employee: submit OT request ───────────────────────────────────
+
+@app.route('/api/overtime/my-requests', methods=['GET'])
+def api_ot_my_list():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM overtime_requests
+            WHERE staff_id=%s ORDER BY request_date DESC LIMIT 30
+        """, (sid,)).fetchall()
+    return jsonify([ot_req_row(r) for r in rows])
+
+@app.route('/api/overtime/my-requests', methods=['POST'])
+def api_ot_submit():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    b = request.get_json(force=True)
+    request_date = b.get('request_date','').strip()
+    start_time   = b.get('start_time','').strip()
+    end_time     = b.get('end_time','').strip()
+    reason       = b.get('reason','').strip()
+
+    if not request_date or not start_time or not end_time:
+        return jsonify({'error': '請填寫加班日期及時間'}), 400
+    if not reason:
+        return jsonify({'error': '請填寫加班原因'}), 400
+
+    # Calculate OT hours
+    from datetime import datetime as _dt_ot, timedelta as _td_ot
+    try:
+        s = _dt_ot.strptime(start_time, '%H:%M')
+        e = _dt_ot.strptime(end_time,   '%H:%M')
+        if e <= s: e += _td_ot(days=1)   # overnight
+        ot_hours = round((e - s).total_seconds() / 3600, 2)
+    except ValueError:
+        return jsonify({'error': '時間格式錯誤'}), 400
+
+    if ot_hours <= 0 or ot_hours > 12:
+        return jsonify({'error': '加班時數不合理（0~12小時）'}), 400
+
+    with get_db() as conn:
+        _ensure_ot_cols(conn)
+        row = conn.execute("""
+            INSERT INTO overtime_requests
+              (staff_id, request_date, start_time, end_time, ot_hours, reason)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+        """, (sid, request_date, start_time, end_time, ot_hours, reason)).fetchone()
+    return jsonify(ot_req_row(row)), 201
+
+# ── Admin: list / review ─────────────────────────────────────────
+
+@app.route('/api/overtime/requests', methods=['GET'])
+@login_required
+def api_ot_admin_list():
+    status = request.args.get('status','')
+    month  = request.args.get('month','')
+    conds, params = ['TRUE'], []
+    if status: conds.append('r.status=%s');                         params.append(status)
+    if month:  conds.append("to_char(r.request_date,'YYYY-MM')=%s"); params.append(month)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT r.*, ps.name as staff_name, ps.role as staff_role
+            FROM overtime_requests r
+            JOIN punch_staff ps ON ps.id=r.staff_id
+            WHERE {' AND '.join(conds)}
+            ORDER BY r.request_date DESC, r.created_at DESC
+        """, params).fetchall()
+    return jsonify([ot_req_row(r) | {'staff_name': r['staff_name'], 'staff_role': r['staff_role']} for r in rows])
+
+@app.route('/api/overtime/requests/<int:rid>', methods=['PUT'])
+@login_required
+def api_ot_review(rid):
+    b           = request.get_json(force=True)
+    action      = b.get('action')    # approve | reject
+    reviewed_by = b.get('reviewed_by','').strip()
+    review_note = b.get('review_note','').strip()
+
+    if action not in ('approve','reject'):
+        return jsonify({'error': 'invalid action'}), 400
+
+    new_status = 'approved' if action == 'approve' else 'rejected'
+    ot_pay_final = 0.0
+
+    with get_db() as conn:
+        _ensure_ot_cols(conn)
+        req = conn.execute("SELECT * FROM overtime_requests WHERE id=%s", (rid,)).fetchone()
+        if not req: return ('', 404)
+
+        if action == 'approve':
+            staff = conn.execute("""
+                SELECT base_salary, hourly_rate, daily_hours, ot_rate1, ot_rate2, salary_type
+                FROM punch_staff WHERE id=%s
+            """, (req['staff_id'],)).fetchone()
+
+            if staff:
+                ot_pay_final, _ = _calc_ot_pay(staff, req['ot_hours'] or 0)
+
+        row = conn.execute("""
+            UPDATE overtime_requests SET
+              status=%s, reviewed_by=%s, review_note=%s,
+              ot_pay=%s, reviewed_at=NOW()
+            WHERE id=%s RETURNING *
+        """, (new_status, reviewed_by, review_note, ot_pay_final, rid)).fetchone()
+
+        result = ot_req_row(row)
+        result['staff_name'] = req['staff_id']  # will be filled below
+
+        # Get staff name
+        sn = conn.execute("SELECT name FROM punch_staff WHERE id=%s", (req['staff_id'],)).fetchone()
+        result['staff_name'] = sn['name'] if sn else ''
+
+    return jsonify(result)
+
+@app.route('/api/overtime/requests/<int:rid>', methods=['DELETE'])
+@login_required
+def api_ot_delete(rid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM overtime_requests WHERE id=%s", (rid,))
+    return jsonify({'deleted': rid})
+
+# ── Preview pay calculation ───────────────────────────────────────
+
+@app.route('/api/overtime/calc-preview', methods=['POST'])
+@login_required
+def api_ot_calc_preview():
+    """Preview overtime pay for given staff + hours."""
+    b        = request.get_json(force=True)
+    staff_id = b.get('staff_id')
+    ot_hours = float(b.get('ot_hours') or 0)
+    if not staff_id: return jsonify({'error': 'staff_id required'}), 400
+    with get_db() as conn:
+        _ensure_ot_cols(conn)
+        staff = conn.execute("""
+            SELECT name, base_salary, hourly_rate, daily_hours, ot_rate1, ot_rate2, salary_type
+            FROM punch_staff WHERE id=%s
+        """, (staff_id,)).fetchone()
+    if not staff: return ('', 404)
+    ot_pay, base_hourly = _calc_ot_pay(staff, ot_hours)
+    h1 = min(ot_hours, 2.0)
+    h2 = max(0.0, ot_hours - 2.0)
+    return jsonify({
+        'staff_name':    staff['name'],
+        'salary_type':   staff.get('salary_type','monthly'),
+        'base_salary':   float(staff.get('base_salary') or 0),
+        'hourly_rate':   float(staff.get('hourly_rate') or 0),
+        'base_hourly':   round(base_hourly, 2),
+        'ot_hours':      ot_hours,
+        'h1':            h1,
+        'h2':            h2,
+        'ot_rate1':      float(staff.get('ot_rate1') or 1.33),
+        'ot_rate2':      float(staff.get('ot_rate2') or 1.67),
+        'ot_pay':        ot_pay,
+    })
 
 @app.route('/')
 def index():

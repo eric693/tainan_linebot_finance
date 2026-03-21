@@ -753,6 +753,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       <button class="inv-tab"        id="punchtab-records"  onclick="switchPunchTab('records')">打卡記錄</button>
       <button class="inv-tab"        id="punchtab-manual"   onclick="switchPunchTab('manual')">補打卡（管理員）</button>
       <button class="inv-tab"        id="punchtab-requests" onclick="switchPunchTab('requests')">補打申請</button>
+      <button class="inv-tab"        id="punchtab-overtime" onclick="switchPunchTab('overtime')">加班申請</button>
       <button class="inv-tab"        id="punchtab-staff"    onclick="switchPunchTab('staff')">員工管理</button>
       <button class="inv-tab"        id="punchtab-gps"      onclick="switchPunchTab('gps')">GPS 設定</button>
       <button class="inv-tab"        id="punchtab-line"     onclick="switchPunchTab('line')">LINE 打卡</button>
@@ -900,6 +901,26 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
         <span id="preq-count" style="font-size:12px;color:var(--muted)"></span>
       </div>
       <div id="preq-list"></div>
+    </div>
+
+
+    <!-- ── 加班申請 ── -->
+    <div id="punch-panel-overtime" style="display:none">
+      <div class="filter-bar" style="margin-bottom:20px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="ot-filter-month" onchange="loadOTRequests()">
+        <div class="filter-divider"></div>
+        <span class="filter-label">狀態</span>
+        <select class="filter-input" id="ot-filter-status" onchange="loadOTRequests()" style="min-width:120px">
+          <option value="pending">待審核</option>
+          <option value="">全部</option>
+          <option value="approved">已核准</option>
+          <option value="rejected">已退回</option>
+        </select>
+        <span style="flex:1"></span>
+        <span id="ot-req-count" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div id="ot-req-list"></div>
     </div>
 
     <!-- ── GPS 設定 ── -->
@@ -1265,10 +1286,45 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
         </div>
         <div></div>
       </div>
+      <div style="margin-bottom:12px">
+        <label class="form-label">計薪方式</label>
+        <div style="display:flex;gap:10px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+            <input type="radio" name="sem-salary-type" id="sem-type-monthly" value="monthly" onchange="semSalaryTypeChange()" checked>月薪制
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+            <input type="radio" name="sem-salary-type" id="sem-type-hourly" value="hourly" onchange="semSalaryTypeChange()">時薪制
+          </label>
+        </div>
+      </div>
       <div class="form-row">
-        <div><label class="form-label">底薪（月）</label><input class="form-input" type="number" id="sem-base" placeholder="0" min="0"></div>
+        <div id="sem-base-wrap"><label class="form-label">月薪底薪</label><input class="form-input" type="number" id="sem-base" placeholder="0" min="0"></div>
+        <div id="sem-hourly-wrap" style="display:none"><label class="form-label">時薪（元/小時）</label><input class="form-input" type="number" id="sem-hourly-rate" placeholder="0" min="0"></div>
         <div><label class="form-label">投保薪資</label><input class="form-input" type="number" id="sem-insured" placeholder="0" min="0">
           <div style="font-size:11px;color:var(--muted);margin-top:3px">用於勞健保公式計算</div>
+        </div>
+      </div>
+      <div style="padding:12px 14px;background:#fef3e8;border-radius:8px;border:1px solid #f5c0a0;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:700;color:var(--orange);margin-bottom:8px">加班費計算設定</div>
+        <div class="form-row">
+          <div>
+            <label class="form-label">每日標準工時（小時）</label>
+            <input class="form-input" type="number" id="sem-daily-hours" value="8" min="1" max="24" step="0.5">
+            <div style="font-size:11px;color:var(--muted);margin-top:3px">超過此時數才計算加班費</div>
+          </div>
+          <div></div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label class="form-label">前 2 小時加班倍率</label>
+            <input class="form-input" type="number" id="sem-ot-rate1" value="1.33" min="1" max="3" step="0.01">
+            <div style="font-size:11px;color:var(--muted);margin-top:3px">台灣勞基法第 1-2 小時</div>
+          </div>
+          <div>
+            <label class="form-label">第 3 小時起加班倍率</label>
+            <input class="form-input" type="number" id="sem-ot-rate2" value="1.67" min="1" max="3" step="0.01">
+            <div style="font-size:11px;color:var(--muted);margin-top:3px">台灣勞基法第 3 小時起</div>
+          </div>
         </div>
       </div>
       <div><label class="form-label">備註</label><input class="form-input" id="sem-notes" placeholder="選填" style="width:100%"></div>
@@ -1538,6 +1594,40 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       <button class="btn btn-outline" onclick="closePreqModal()">取消</button>
       <button class="btn btn-danger" onclick="reviewPunchReq('reject')">退回</button>
       <button class="btn btn-green" onclick="reviewPunchReq('approve')" style="background:var(--green);color:#fff">核准並補打</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Overtime Review Modal -->
+<div class="modal-overlay" id="ot-review-modal" style="display:none">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <span class="modal-title" id="otrm-title">審核加班申請</span>
+      <button class="modal-close" onclick="closeOTReview()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="otrm-id">
+      <div id="otrm-info" style="padding:12px;background:var(--bg);border-radius:8px;margin-bottom:14px;font-size:13px"></div>
+      <!-- Pay preview -->
+      <div id="otrm-pay-preview" style="padding:12px;background:var(--green-light);border-radius:8px;margin-bottom:14px;font-size:13px;display:none">
+        <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:6px">加班費試算</div>
+        <div id="otrm-pay-detail"></div>
+        <div style="font-size:18px;font-weight:700;color:var(--green);margin-top:6px">加班費：<span id="otrm-pay-amount">$0</span></div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label class="form-label">審核人員 *</label>
+        <input class="form-input" id="otrm-by" placeholder="管理員姓名" style="width:100%">
+      </div>
+      <div>
+        <label class="form-label">審核意見（選填）</label>
+        <input class="form-input" id="otrm-note" placeholder="退回原因或備註" style="width:100%">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeOTReview()">取消</button>
+      <button class="btn btn-danger" onclick="reviewOTRequest('reject')">退回</button>
+      <button class="btn btn-green" onclick="reviewOTRequest('approve')" style="background:var(--green);color:#fff">核准</button>
     </div>
   </div>
 </div>
@@ -3151,7 +3241,7 @@ function initPunch() {
 }
 
 function switchPunchTab(tab) {
-  ['summary','records','manual','requests','staff','gps','line'].forEach(t => {
+  ['summary','records','manual','requests','overtime','staff','gps','line'].forEach(t => {
     document.getElementById('punchtab-' + t).classList.toggle('active', t === tab);
     document.getElementById('punch-panel-' + t).style.display = t === tab ? '' : 'none';
   });
@@ -3160,6 +3250,7 @@ function switchPunchTab(tab) {
   if (tab === 'manual')  { loadManualStaffOptions(); loadManualRecords(); }
   if (tab === 'staff')   loadPunchStaff();
   if (tab === 'requests') loadPunchRequests();
+  if (tab === 'overtime') loadOTRequests();
   if (tab === 'gps')     loadGpsSettings();
   if (tab === 'line')    loadLinePunchConfig();
 }
@@ -4649,9 +4740,12 @@ function openSalEmpModal(id) {
   document.getElementById('sem-pos').value     = e.position_title || '';
   document.getElementById('sem-hire').value    = e.hire_date || '';
   document.getElementById('sem-birth').value   = e.birth_date || '';
-  document.getElementById('sem-base').value    = e.base_salary || 0;
-  document.getElementById('sem-insured').value = e.insured_salary || 0;
-  document.getElementById('sem-notes').value   = e.salary_notes || '';
+  document.getElementById('sem-base').value         = e.base_salary || 0;
+  document.getElementById('sem-insured').value      = e.insured_salary || 0;
+  document.getElementById('sem-daily-hours').value  = e.daily_hours || 8;
+  document.getElementById('sem-ot-rate1').value     = e.ot_rate1 || 1.33;
+  document.getElementById('sem-ot-rate2').value     = e.ot_rate2 || 1.67;
+  document.getElementById('sem-notes').value        = e.salary_notes || '';
   document.getElementById('sal-emp-modal').style.display = 'flex';
 }
 function closeSalEmpModal() { document.getElementById('sal-emp-modal').style.display = 'none'; }
@@ -4666,6 +4760,9 @@ async function saveSalEmp() {
     birth_date:     document.getElementById('sem-birth').value || null,
     base_salary:    parseFloat(document.getElementById('sem-base').value) || 0,
     insured_salary: parseFloat(document.getElementById('sem-insured').value) || 0,
+    daily_hours:    parseFloat(document.getElementById('sem-daily-hours').value) || 8,
+    ot_rate1:       parseFloat(document.getElementById('sem-ot-rate1').value) || 1.33,
+    ot_rate2:       parseFloat(document.getElementById('sem-ot-rate2').value) || 1.67,
     salary_notes:   document.getElementById('sem-notes').value.trim(),
   };
   try {
@@ -5317,6 +5414,191 @@ async function deleteShiftType(id) {
   await fetch(`/api/shifts/types/${id}`, {method:'DELETE'});
   showToast('已刪除','success');
   await loadShiftTypes();
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 加班申請模組
+// ═══════════════════════════════════════════════════════════════
+let otReqData = [];
+const OT_STATUS_LABEL = {pending:'待審核', approved:'已核准', rejected:'已退回'};
+const OT_STATUS_COLOR = {pending:'var(--orange)', approved:'var(--green)', rejected:'var(--red)'};
+
+// salary type toggle in employee modal
+function semSalaryTypeChange() {
+  const isHourly = document.getElementById('sem-type-hourly').checked;
+  document.getElementById('sem-base-wrap').style.display   = isHourly ? 'none' : '';
+  document.getElementById('sem-hourly-wrap').style.display = isHourly ? '' : 'none';
+}
+
+async function loadOTRequests() {
+  const status = document.getElementById('ot-filter-status').value;
+  const month  = document.getElementById('ot-filter-month').value;
+  let url = '/api/overtime/requests?';
+  if (status) url += `status=${status}&`;
+  if (month)  url += `month=${month}&`;
+  const res = await fetch(url);
+  otReqData = await res.json();
+  document.getElementById('ot-req-count').textContent = `共 ${otReqData.length} 筆`;
+  renderOTRequests();
+}
+
+function renderOTRequests() {
+  const wrap = document.getElementById('ot-req-list');
+  if (!otReqData.length) {
+    wrap.innerHTML = '<div class="card" style="padding:40px;text-align:center;color:var(--muted)">無符合申請</div>';
+    return;
+  }
+  wrap.innerHTML = otReqData.map(r => {
+    const sc = OT_STATUS_COLOR[r.status] || 'var(--muted)';
+    const sl = OT_STATUS_LABEL[r.status] || r.status;
+    const isPending = r.status === 'pending';
+    const payStr = r.ot_pay > 0 ? `　加班費：<strong style="color:var(--green)">$${Number(r.ot_pay).toLocaleString()}</strong>` : '';
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+        <div>
+          <span class="card-title">${escHtml(r.staff_name||'')}</span>
+          ${r.staff_role?`<span style="font-size:12px;color:var(--muted);margin-left:8px">${escHtml(r.staff_role)}</span>`:''}
+          <div style="font-size:12px;color:var(--muted);margin-top:3px">
+            ${r.request_date}　${r.start_time}～${r.end_time}　<strong>${r.ot_hours}小時</strong>${payStr}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:700;color:${sc}">${sl}</span>
+          ${isPending ? `<button class="btn btn-primary btn-sm" onclick="openOTReview(${r.id})">審核</button>` : ''}
+          <button class="btn btn-danger btn-sm" onclick="deleteOTReq(${r.id})">刪除</button>
+        </div>
+      </div>
+      <div style="padding:8px 20px;background:var(--bg);font-size:12px;color:var(--text)">
+        <strong>原因：</strong>${escHtml(r.reason||'')}
+        ${r.review_note?`　<span style="color:${sc}">審核意見：${escHtml(r.review_note)}</span>`:''}
+        ${r.reviewed_by?`　<span style="color:var(--muted)">審核人：${escHtml(r.reviewed_by)}</span>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function openOTReview(id) {
+  const r = otReqData.find(x => x.id === id);
+  if (!r) return;
+  document.getElementById('otrm-id').value = id;
+  document.getElementById('otrm-by').value = '';
+  document.getElementById('otrm-note').value = '';
+  document.getElementById('otrm-title').textContent = `審核加班申請 — ${r.staff_name}`;
+  document.getElementById('otrm-info').innerHTML =
+    `<strong>${escHtml(r.staff_name)}</strong><br>
+     日期：${r.request_date}　時間：${r.start_time}～${r.end_time}　<strong>${r.ot_hours} 小時</strong><br>
+     <span style="color:var(--muted)">原因：${escHtml(r.reason)}</span>`;
+
+  // Load pay preview
+  const prevEl   = document.getElementById('otrm-pay-preview');
+  const detailEl = document.getElementById('otrm-pay-detail');
+  const amtEl    = document.getElementById('otrm-pay-amount');
+  prevEl.style.display = 'none';
+  try {
+    const pr = await fetch('/api/overtime/calc-preview', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ staff_id: r.staff_id, ot_hours: r.ot_hours })
+    });
+    const pd = await pr.json();
+    if (pd.base_hourly > 0) {
+      const typeLabel = pd.salary_type === 'hourly' ? '時薪制' : '月薪制';
+      let detail = `${typeLabel}　時薪 $${pd.base_hourly}/h<br>`;
+      if (pd.h1 > 0) detail += `前 ${pd.h1}h × ${pd.ot_rate1} = $${Math.round(pd.base_hourly*pd.h1*pd.ot_rate1)}<br>`;
+      if (pd.h2 > 0) detail += `後 ${pd.h2}h × ${pd.ot_rate2} = $${Math.round(pd.base_hourly*pd.h2*pd.ot_rate2)}`;
+      detailEl.innerHTML = detail;
+      amtEl.textContent  = `$${Number(pd.ot_pay).toLocaleString()}`;
+      prevEl.style.display = '';
+    }
+  } catch(e) { /* no preview */ }
+
+  document.getElementById('ot-review-modal').style.display = 'flex';
+}
+function closeOTReview() { document.getElementById('ot-review-modal').style.display = 'none'; }
+
+async function reviewOTRequest(action) {
+  const id   = document.getElementById('otrm-id').value;
+  const by   = document.getElementById('otrm-by').value.trim();
+  const note = document.getElementById('otrm-note').value.trim();
+  if (!by) { showToast('請填寫審核人員姓名','error'); return; }
+  const res  = await fetch(`/api/overtime/requests/${id}`, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action, reviewed_by: by, review_note: note })
+  });
+  const d = await res.json();
+  if (d.error) { showToast(d.error,'error'); return; }
+  closeOTReview();
+  const msg = action === 'approve'
+    ? `已核准　加班費 $${Number(d.ot_pay||0).toLocaleString()}`
+    : '已退回';
+  showToast(msg,'success');
+  await loadOTRequests();
+}
+
+async function deleteOTReq(id) {
+  if (!confirm('確定刪除此加班申請？')) return;
+  await fetch(`/api/overtime/requests/${id}`, {method:'DELETE'});
+  showToast('已刪除','success');
+  otReqData = otReqData.filter(r=>r.id!==id);
+  renderOTRequests();
+  document.getElementById('ot-req-count').textContent = `共 ${otReqData.length} 筆`;
+}
+
+// Patch openSalEmpModal to handle salary type
+const _origOpenSalEmpModal = openSalEmpModal;
+async function openSalEmpModal(id=null) {
+  await _origOpenSalEmpModal(id);
+  if (id) {
+    const e = salEmps.find(x=>x.id===id);
+    if (e) {
+      const isHourly = (e.salary_type === 'hourly');
+      document.getElementById('sem-type-monthly').checked = !isHourly;
+      document.getElementById('sem-type-hourly').checked  =  isHourly;
+      if (document.getElementById('sem-hourly-rate'))
+        document.getElementById('sem-hourly-rate').value = e.hourly_rate||0;
+      semSalaryTypeChange();
+    }
+  } else {
+    document.getElementById('sem-type-monthly').checked = true;
+    document.getElementById('sem-type-hourly').checked  = false;
+    if (document.getElementById('sem-hourly-rate'))
+      document.getElementById('sem-hourly-rate').value = 0;
+    semSalaryTypeChange();
+  }
+}
+
+// Patch saveSalEmp to include salary_type + hourly_rate
+const _origSaveSalEmp = saveSalEmp;
+async function saveSalEmp() {
+  // inject extra fields into body via monkey-patch on fetch
+  const isHourly = document.getElementById('sem-type-hourly').checked;
+  const _origFetch = window._salFetch || fetch;
+  // Just call original and handle in API — add to body via overriding
+  const id = document.getElementById('sem-id').value;
+  const body = {
+    employee_code:  document.getElementById('sem-code').value.trim(),
+    department:     document.getElementById('sem-dept').value.trim(),
+    position_title: document.getElementById('sem-pos').value.trim(),
+    hire_date:      document.getElementById('sem-hire').value || null,
+    birth_date:     document.getElementById('sem-birth').value || null,
+    base_salary:    isHourly ? 0 : (parseFloat(document.getElementById('sem-base').value)||0),
+    insured_salary: parseFloat(document.getElementById('sem-insured').value)||0,
+    daily_hours:    parseFloat(document.getElementById('sem-daily-hours').value)||8,
+    ot_rate1:       parseFloat(document.getElementById('sem-ot-rate1').value)||1.33,
+    ot_rate2:       parseFloat(document.getElementById('sem-ot-rate2').value)||1.67,
+    salary_notes:   document.getElementById('sem-notes').value.trim(),
+    salary_type:    isHourly ? 'hourly' : 'monthly',
+    hourly_rate:    isHourly ? (parseFloat(document.getElementById('sem-hourly-rate').value)||0) : 0,
+  };
+  if (!body.employee_code) { showToast('請填寫員工代碼','error'); return; }
+  const url  = id ? `/api/salary/employees/${id}` : '/api/salary/employees';
+  const meth = id ? 'PUT' : 'POST';
+  const res  = await fetch(url,{method:meth,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const data = await res.json();
+  if (data.error) { showToast(data.error,'error'); return; }
+  closeSalEmpModal();
+  showToast(id?'已更新':'已新增','success');
+  await loadSalEmps();
 }
 
 </script>
