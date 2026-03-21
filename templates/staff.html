@@ -433,6 +433,9 @@ function switchTab(tab){
     document.getElementById('tab-'+t).classList.toggle('active',t===tab);
     document.getElementById('panel-'+t).style.display=t===tab?'':'none';
   });
+  // Clear badge when user opens the tab
+  if(tab==='punch') setTabBadge('tbadge-punch', 0);
+  if(tab==='sched') setTabBadge('tbadge-sched', 0);
   document.getElementById('today-log-wrap').style.display=tab==='punch'?'':'none';
   // Hide punch request panel when leaving punch tab
   if(tab!=='punch'){
@@ -1180,12 +1183,7 @@ async function refreshStaffBadges() {
 }
 
 // Clear punch badge when user opens punch tab
-const _origSwitchTab = switchTab;
-function switchTab(tab) {
-  _origSwitchTab(tab);
-  if (tab === 'punch') setTabBadge('tbadge-punch', 0);
-  if (tab === 'sched') setTabBadge('tbadge-sched', 0);
-}
+// badge clear moved into real switchTab
 
 </script>
 </body>
