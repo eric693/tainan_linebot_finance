@@ -1846,6 +1846,7 @@ function showPage(page, e) {
   closeSidebar();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
+  setTimeout(refreshBadges, 600);
   ['records','charts','summary','ocr','inv','punch','sched','shift','salary'].forEach(p =>
     document.getElementById('page-' + p).style.display = p === page ? '' : 'none'
   );
@@ -4953,13 +4954,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(refreshBadges, 60000);
 });
 
-// Also refresh when switching away from punch/sched pages (after review)
-const _origShowPage = showPage;
-function showPage(page, e) {
-  _origShowPage(page, e);
-  // Small delay to let any review action complete
-  setTimeout(refreshBadges, 800);
-}
+// Badges refresh after page switch — injected into real showPage below
 
 
 // ═══════════════════════════════════════════════════════════════
