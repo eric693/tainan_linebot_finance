@@ -4955,7 +4955,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════════════════════════
 // 班別排班模組
 // ═══════════════════════════════════════════════════════════════
-let shiftTypes     = [];
+let shiftTypes       = [];
+let shiftLeaveLookup = {};
 let shiftAssigns   = [];
 let shiftEditTypeId = null;
 let samSelectedDates = new Set();
@@ -4967,14 +4968,23 @@ let samSelectedStaff = new Set();
 async function loadShiftCalendar() {
   const month = document.getElementById('shift-month').value;
   if (!month) return;
-  const [typesRes, assignsRes, staffRes] = await Promise.all([
+  const [typesRes, assignsRes, staffRes, leaveRes] = await Promise.all([
     fetch('/api/shifts/types').then(r=>r.json()),
     fetch(`/api/shifts/assignments?month=${month}`).then(r=>r.json()),
     fetch('/api/punch/staff').then(r=>r.json()),
+    fetch(`/api/schedule/admin/requests?month=${month}&status=approved`).then(r=>r.json()).catch(()=>[]),
   ]);
-  shiftTypes  = typesRes.filter(t => t.active);
+  shiftTypes   = typesRes.filter(t => t.active);
   shiftAssigns = assignsRes;
   punchStaffList = staffRes;
+  // Build leave lookup: {staff_id: Set(date_str)}
+  shiftLeaveLookup = {};
+  if (Array.isArray(leaveRes)) {
+    leaveRes.forEach(req => {
+      if (!shiftLeaveLookup[req.staff_id]) shiftLeaveLookup[req.staff_id] = new Set();
+      (req.dates||[]).forEach(d => shiftLeaveLookup[req.staff_id].add(d));
+    });
+  }
   renderShiftCalendar(month, staffRes, assignsRes);
 }
 
@@ -5027,18 +5037,27 @@ function renderShiftCalendar(month, staffList, assigns) {
     days.forEach(({ds}) => {
       const a = lookup[ds] && lookup[ds][staff.id];
       if (a) {
+        const onLeaveA = shiftLeaveLookup[staff.id] && shiftLeaveLookup[staff.id].has(ds);
         html += `<td style="padding:3px;border-bottom:1px solid var(--border);border-right:1px solid #f0f2f8;text-align:center">
-          <div style="background:${a.color||'#4a7bda'};color:#fff;border-radius:5px;padding:3px 5px;font-size:11px;cursor:pointer;line-height:1.3"
-               onclick="openShiftAssignModal('${ds}',${staff.id})" title="點擊修改">
+          <div style="background:${a.color||'#4a7bda'};color:#fff;border-radius:5px;padding:3px 5px;font-size:11px;cursor:pointer;line-height:1.3;position:relative"
+               onclick="openShiftAssignModal('${ds}',${staff.id})" title="點擊修改${onLeaveA?' ⚠️ 該員工當日有核准排休':''}">
+            ${onLeaveA ? '<div style="position:absolute;top:-6px;right:-4px;background:#e53e3e;color:#fff;font-size:8px;font-weight:700;border-radius:8px;padding:1px 4px">休!</div>' : ''}
             <div style="font-weight:700">${escHtml(a.shift_name)}</div>
             <div style="opacity:.9">${a.start_time}~${a.end_time}</div>
           </div>
         </td>`;
       } else {
-        html += `<td style="padding:3px;border-bottom:1px solid var(--border);border-right:1px solid #f0f2f8;text-align:center">
-          <div style="width:60px;height:38px;border:1.5px dashed var(--border);border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--border);font-size:16px"
-               onclick="openShiftAssignModal('${ds}',${staff.id})" title="點擊指派">+</div>
-        </td>`;
+        const onLeave = shiftLeaveLookup[staff.id] && shiftLeaveLookup[staff.id].has(ds);
+        if (onLeave) {
+          html += `<td style="padding:3px;border-bottom:1px solid var(--border);border-right:1px solid #f0f2f8;text-align:center">
+            <div style="width:60px;height:38px;border-radius:5px;background:#edfaf4;border:1.5px solid #a8dfc5;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#2e9e6b" title="已核准排休">休假</div>
+          </td>`;
+        } else {
+          html += `<td style="padding:3px;border-bottom:1px solid var(--border);border-right:1px solid #f0f2f8;text-align:center">
+            <div style="width:60px;height:38px;border:1.5px dashed var(--border);border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--border);font-size:16px"
+                 onclick="openShiftAssignModal('${ds}',${staff.id})" title="點擊指派">+</div>
+          </td>`;
+        }
       }
     });
     html += '</tr>';
@@ -5140,7 +5159,7 @@ function toggleSamDate(ds) {
 
 function closeShiftAssignModal() { document.getElementById('shift-assign-modal').style.display = 'none'; }
 
-async function saveShiftAssign() {
+async function saveShiftAssign(force=false) {
   const staffIds    = [...samSelectedStaff];
   const shiftTypeId = parseInt(document.getElementById('sam-shift-type').value);
   const dates       = [...samSelectedDates].sort();
@@ -5149,12 +5168,21 @@ async function saveShiftAssign() {
   if (!dates.length)    { showToast('請選擇至少一個日期', 'error'); return; }
   const res  = await fetch('/api/shifts/assignments', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ staff_ids: staffIds, shift_type_id: shiftTypeId, dates, note })
+    body: JSON.stringify({ staff_ids: staffIds, shift_type_id: shiftTypeId, dates, note, force })
   });
   const data = await res.json();
-  if (data.error) { showToast(data.error, 'error'); return; }
+  if (!res.ok && data.blocked && !force) {
+    // Show blocked info with option to force override
+    const blockedList = data.blocked.map(b => `${b.staff_name} ${b.date}`).join('\n');
+    if (confirm(`以下員工當日已有核准排休：\n${blockedList}\n\n確定要強制指派班別（覆蓋排休）嗎？`)) {
+      await saveShiftAssign(true);
+    }
+    return;
+  }
+  if (data.error && !data.blocked) { showToast(data.error, 'error'); return; }
   closeShiftAssignModal();
-  showToast(`已指派 ${data.created} 筆排班`, 'success');
+  const msg = data.warning || `已指派 ${data.created} 筆排班`;
+  showToast(msg, 'success');
   await loadShiftCalendar();
 }
 

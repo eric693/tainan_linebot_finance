@@ -3812,20 +3812,61 @@ def api_shift_assignments_list():
 @app.route('/api/shifts/assignments', methods=['POST'])
 @login_required
 def api_shift_assignment_create():
-    """Upsert — one shift per staff per day."""
+    """Upsert — one shift per staff per day. Blocked if employee has approved leave."""
     b = request.get_json(force=True)
-    staff_ids = b.get('staff_ids', [])
+    staff_ids     = b.get('staff_ids', [])
     shift_type_id = b.get('shift_type_id')
-    dates = b.get('dates', [])
-    note  = b.get('note','').strip()
+    dates         = b.get('dates', [])
+    note          = b.get('note','').strip()
+    force         = bool(b.get('force', False))   # admin override flag
 
     if not staff_ids or not shift_type_id or not dates:
         return jsonify({'error': '請選擇員工、班別及日期'}), 400
 
-    created = 0
+    created  = 0
+    blocked  = []   # [{staff_name, date}]
+
     with get_db() as conn:
+        # Build leave lookup for all involved staff × dates
+        # Format: {staff_id: set(date_str)}
+        leave_lookup = {}
+        if not force:
+            for sid in staff_ids:
+                # Get all approved leave dates for this staff in relevant months
+                months = list({d[:7] for d in dates})
+                for month in months:
+                    row = conn.execute("""
+                        SELECT dates FROM schedule_requests
+                        WHERE staff_id=%s AND month=%s AND status='approved'
+                    """, (sid, month)).fetchone()
+                    if row:
+                        approved_dates = row['dates'] or []
+                        if isinstance(approved_dates, str):
+                            import json as _j2
+                            try: approved_dates = _j2.loads(approved_dates)
+                            except: approved_dates = []
+                        if sid not in leave_lookup:
+                            leave_lookup[sid] = set()
+                        leave_lookup[sid].update(approved_dates)
+
+        # Get staff names for error messages
+        staff_names = {}
+        rows = conn.execute(
+            "SELECT id, name FROM punch_staff WHERE id = ANY(%s::int[])",
+            (staff_ids,)
+        ).fetchall()
+        for r in rows:
+            staff_names[r['id']] = r['name']
+
         for sid in staff_ids:
+            leave_dates = leave_lookup.get(sid, set())
             for date_str in dates:
+                if date_str in leave_dates and not force:
+                    blocked.append({
+                        'staff_name': staff_names.get(sid, str(sid)),
+                        'date': date_str
+                    })
+                    continue
                 conn.execute("""
                     INSERT INTO shift_assignments (staff_id, shift_type_id, shift_date, note)
                     VALUES (%s, %s, %s, %s)
@@ -3833,7 +3874,17 @@ def api_shift_assignment_create():
                       SET shift_type_id=%s, note=%s, created_at=NOW()
                 """, (sid, shift_type_id, date_str, note, shift_type_id, note))
                 created += 1
-    return jsonify({'created': created}), 201
+
+    if blocked and created == 0:
+        msgs = [f"{x['staff_name']} {x['date']}" for x in blocked]
+        err_msg = '以下日期員工已有核准的排休，無法指派班別：' + '、'.join(msgs)
+        return jsonify({'error': err_msg, 'blocked': blocked}), 422
+
+    result = {'created': created}
+    if blocked:
+        result['warning'] = f'已指派 {created} 筆，跳過 {len(blocked)} 筆（員工當日有核准排休）'
+        result['blocked'] = blocked
+    return jsonify(result), 201
 
 @app.route('/api/shifts/assignments/<int:aid>', methods=['DELETE'])
 @login_required
