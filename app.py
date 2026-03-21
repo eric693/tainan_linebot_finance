@@ -2788,11 +2788,26 @@ def sal_emp_row(row):
     if not row: return None
     d = dict(row)
     for f in ['base_salary', 'insured_salary']:
-        if d.get(f) is not None: d[f] = float(d[f])
+        try:
+            if d.get(f) is not None: d[f] = float(d[f])
+        except Exception: d[f] = 0
     for f in ['hire_date', 'birth_date']:
-        if d.get(f): d[f] = d[f].isoformat()
-    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
-    if d.get('updated_at'): d['updated_at'] = d['updated_at'].isoformat()
+        try:
+            if d.get(f): d[f] = d[f].isoformat()
+        except Exception: d[f] = None
+    for f in ['created_at', 'updated_at']:
+        try:
+            if d.get(f): d[f] = d[f].isoformat()
+        except Exception: d[f] = None
+    # Fill defaults for any missing salary columns
+    d.setdefault('employee_code', '')
+    d.setdefault('department', '')
+    d.setdefault('position_title', '')
+    d.setdefault('base_salary', 0)
+    d.setdefault('insured_salary', 0)
+    d.setdefault('salary_notes', '')
+    d.setdefault('hire_date', None)
+    d.setdefault('birth_date', None)
     return d
 
 def sal_rec_row(row, items=None):
@@ -2816,7 +2831,27 @@ def sal_rec_row(row, items=None):
 @app.route('/api/salary/employees', methods=['GET'])
 @login_required
 def api_sal_emp_list():
-    """List all punch_staff as salary employees."""
+    """List all punch_staff as salary employees. Auto-runs column migrations."""
+    # Ensure salary columns exist on punch_staff (idempotent)
+    salary_migrations = [
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS employee_code TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS department TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS position_title TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS hire_date DATE",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS birth_date DATE",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS base_salary NUMERIC(12,2) DEFAULT 0",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS insured_salary NUMERIC(12,2) DEFAULT 0",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS salary_notes TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
+        "ALTER TABLE salary_records ADD COLUMN IF NOT EXISTS staff_id INT",
+    ]
+    for sql in salary_migrations:
+        try:
+            with get_db() as conn:
+                conn.execute(sql)
+        except Exception:
+            pass
+
     with get_db() as conn:
         rows = conn.execute("""
             SELECT id, name, username, role, active,
@@ -2827,7 +2862,8 @@ def api_sal_emp_list():
                    COALESCE(base_salary,0)    as base_salary,
                    COALESCE(insured_salary,0) as insured_salary,
                    COALESCE(salary_notes,'')  as salary_notes,
-                   created_at, updated_at
+                   created_at,
+                   updated_at
             FROM punch_staff
             ORDER BY name
         """).fetchall()
@@ -2838,6 +2874,22 @@ def api_sal_emp_list():
 def api_sal_emp_update(eid):
     """Update salary fields on a punch_staff member."""
     b = request.get_json(force=True)
+    # Ensure columns exist before updating
+    for sql in [
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS employee_code TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS department TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS position_title TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS hire_date DATE",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS birth_date DATE",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS base_salary NUMERIC(12,2) DEFAULT 0",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS insured_salary NUMERIC(12,2) DEFAULT 0",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS salary_notes TEXT DEFAULT ''",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
+    ]:
+        try:
+            with get_db() as conn: conn.execute(sql)
+        except Exception: pass
+
     with get_db() as conn:
         row = conn.execute("""
             UPDATE punch_staff SET
@@ -3169,7 +3221,7 @@ def _build_richmenu_body(gps_required):
 
 
 def _create_richmenu_image(rich_menu_id, cfg, gps_required):
-    """Generate a 2500x843 PNG with Chinese text labels and upload to LINE."""
+    """Generate a 2500x843 PNG with large Chinese text and upload to LINE."""
     import io
 
     token = cfg.get('channel_access_token', '')
@@ -3178,63 +3230,51 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
         from PIL import Image, ImageDraw, ImageFont
 
         W, H = 2500, 843
-        img   = Image.new('RGB', (W, H), '#0f1c3a')
-        draw  = ImageDraw.Draw(img)
+        img  = Image.new('RGB', (W, H), '#0f1c3a')
+        draw = ImageDraw.Draw(img)
 
         panels = [
-            (0,    0,   1250, 421, '#2e9e6b', '上班打卡', 'Clock In'),
-            (1250, 0,   2500, 421, '#d64242', '下班打卡', 'Clock Out'),
-            (0,    422, 1250, 843, '#e07b2a', '休息開始', 'Break Out'),
-            (1250, 422, 2500, 843, '#4a7bda', '休息結束', 'Break In'),
+            (0,    0,   1250, 421, '#2e9e6b', '上班打卡'),
+            (1250, 0,   2500, 421, '#d64242', '下班打卡'),
+            (0,    422, 1250, 843, '#e07b2a', '休息開始'),
+            (1250, 422, 2500, 843, '#4a7bda', '休息結束'),
         ]
 
-        # Load fonts
         FONT_PATHS_ZH = [
+            '/usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc',
+            '/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc',
             '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
             '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-            '/usr/share/fonts/noto-cjk/NotoSansCJKtc-Regular.otf',
         ]
-        FONT_PATH_EN = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 
-        font_zh, font_en = None, None
+        font_zh = None
         for fp in FONT_PATHS_ZH:
             try:
-                font_zh = ImageFont.truetype(fp, 96)
+                font_zh = ImageFont.truetype(fp, 180)
                 break
             except Exception:
                 pass
-        try:
-            font_en = ImageFont.truetype(FONT_PATH_EN, 46)
-        except Exception:
-            pass
         if not font_zh:
             font_zh = ImageFont.load_default()
-        if not font_en:
-            font_en = font_zh
 
-        for x1, y1, x2, y2, color, zh, en in panels:
-            draw.rectangle([x1, y1, x2 - 1, y2 - 1], fill=color)
+        DIVIDER = 6
+
+        for x1, y1, x2, y2, color, zh in panels:
+            draw.rectangle([x1 + DIVIDER//2, y1 + DIVIDER//2,
+                            x2 - DIVIDER//2 - 1, y2 - DIVIDER//2 - 1], fill=color)
             cx = (x1 + x2) // 2
             cy = (y1 + y2) // 2
-            # Chinese main label
             bb = draw.textbbox((0, 0), zh, font=font_zh)
             tw, th = bb[2] - bb[0], bb[3] - bb[1]
-            draw.text((cx - tw // 2, cy - th // 2 - 24), zh,
-                      fill='white', font=font_zh)
-            # English subtitle
-            bb2 = draw.textbbox((0, 0), en, font=font_en)
-            tw2 = bb2[2] - bb2[0]
-            draw.text((cx - tw2 // 2, cy + th // 2 - 4), en,
-                      fill=(255, 255, 255, 160), font=font_en)
+            draw.text((cx - tw // 2, cy - th // 2), zh, fill='#ffffff', font=font_zh)
 
-        # Divider lines
-        draw.line([(1250, 0), (1250, H)], fill='#0f1c3a', width=5)
-        draw.line([(0, 421), (W, 421)],   fill='#0f1c3a', width=5)
+        draw.rectangle([1248, 0, 1252, H], fill='#0f1c3a')
+        draw.rectangle([0, 419, W, 423],   fill='#0f1c3a')
 
         buf = io.BytesIO()
         img.save(buf, 'PNG', optimize=True)
         png_bytes = buf.getvalue()
-        print(f"[RICHMENU] Generated PNG with Pillow: {len(png_bytes)} bytes")
+        print(f"[RICHMENU] Generated PNG: {len(png_bytes)} bytes")
 
     except Exception as e:
         # Fallback: plain colored blocks (no text) using struct/zlib
