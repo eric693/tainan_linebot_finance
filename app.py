@@ -3610,6 +3610,54 @@ def api_punch_req_delete(rid):
         conn.execute("DELETE FROM punch_requests WHERE id=%s", (rid,))
     return jsonify({'deleted': rid})
 
+
+@app.route('/api/punch/my-records', methods=['GET'])
+def api_punch_my_records():
+    """Employee self-service: get own punch records for a month."""
+    sid = session.get('punch_staff_id')
+    if not sid:
+        return jsonify({'error': 'not logged in'}), 401
+    month = request.args.get('month', '')   # e.g. 2026-03
+    if not month:
+        from datetime import datetime as _dt2
+        from datetime import timezone as _tz3, timedelta as _td4
+        TW3 = _tz3(_td4(hours=8))
+        month = _dt2.now(TW3).strftime('%Y-%m')
+
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT punch_type, punched_at, gps_distance, location_name, is_manual
+            FROM punch_records
+            WHERE staff_id=%s
+              AND to_char(punched_at AT TIME ZONE 'Asia/Taipei', 'YYYY-MM') = %s
+            ORDER BY punched_at ASC
+        """, (sid, month)).fetchall()
+
+    from datetime import timezone as _tz4, timedelta as _td5
+    TW4 = _tz4(_td5(hours=8))
+    result = {}
+    LABEL = {'in':'上班','out':'下班','break_out':'休息開始','break_in':'休息結束'}
+    for r in rows:
+        pa = r['punched_at']
+        if pa.tzinfo is None:
+            from datetime import timezone as _utz
+            pa = pa.replace(tzinfo=_utz.utc)
+        pa_tw = pa.astimezone(TW4)
+        date_str = pa_tw.strftime('%Y-%m-%d')
+        time_str = pa_tw.strftime('%H:%M')
+        if date_str not in result:
+            result[date_str] = []
+        result[date_str].append({
+            'type':          r['punch_type'],
+            'label':         LABEL.get(r['punch_type'], r['punch_type']),
+            'time':          time_str,
+            'gps_distance':  r['gps_distance'],
+            'location_name': r['location_name'] or '',
+            'is_manual':     bool(r['is_manual']),
+        })
+
+    return jsonify({'month': month, 'records': result})
+
 @app.route('/')
 def index():
     return redirect(url_for('admin_login'))

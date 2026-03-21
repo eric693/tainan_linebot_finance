@@ -187,6 +187,7 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
         <button class="tab active" id="tab-punch" onclick="switchTab('punch')">打卡</button>
         <button class="tab"        id="tab-sched" onclick="switchTab('sched')">排休申請</button>
         <button class="tab"        id="tab-schedule-view" onclick="switchTab('schedule-view')">我的排班</button>
+      <button class="tab"        id="tab-attendance"    onclick="switchTab('attendance')">出勤月曆</button>
       <button class="tab"        id="tab-salary"        onclick="switchTab('salary')">薪資查詢</button>
       </div>
 
@@ -307,6 +308,18 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
       </div>
 
 
+      <!-- ── TAB: 出勤月曆 ── -->
+      <div id="panel-attendance" class="tab-body" style="display:none">
+        <div class="month-row" style="margin-bottom:14px">
+          <span style="font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.08em;text-transform:uppercase">月份</span>
+          <input type="month" class="month-inp" id="att-month-picker" onchange="loadAttendance()">
+        </div>
+        <!-- Summary strip -->
+        <div id="att-summary" style="display:flex;gap:0;border-radius:9px;overflow:hidden;margin-bottom:14px;border:1px solid var(--border)"></div>
+        <!-- Calendar -->
+        <div id="att-calendar"></div>
+      </div>
+
       <!-- ── TAB: 薪資查詢 ── -->
       <div id="panel-salary" class="tab-body" style="display:none">
         <div class="month-row">
@@ -413,7 +426,7 @@ function showMain(){
 }
 
 function switchTab(tab){
-  ['punch','sched','schedule-view','salary'].forEach(t=>{
+  ['punch','sched','schedule-view','attendance','salary'].forEach(t=>{
     document.getElementById('tab-'+t).classList.toggle('active',t===tab);
     document.getElementById('panel-'+t).style.display=t===tab?'':'none';
   });
@@ -430,6 +443,7 @@ function switchTab(tab){
   if(tab==='punch')    { startGPS(); loadTodayLog(); }
   if(tab==='sched')    initSchedTab();
   if(tab==='schedule-view') initScheduleViewTab();
+  if(tab==='attendance') initAttendanceTab();
   if(tab==='salary')   initSalaryTab();
 }
 
@@ -922,6 +936,142 @@ async function loadMyReqs() {
       <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;${REQ_CLS[r.status]||''}">${REQ_LABEL[r.status]||r.status}</span>
     </div>`;
   }).join('');
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 出勤月曆
+// ═══════════════════════════════════════════════════════════════
+const ATT_COLOR = {
+  in:         'var(--green)',
+  out:        'var(--red)',
+  break_out:  'var(--orange)',
+  break_in:   'var(--accent)',
+};
+const ATT_BG = {
+  in:         'var(--green-light)',
+  out:        'var(--red-light)',
+  break_out:  'var(--orange-light)',
+  break_in:   'var(--accent-light)',
+};
+
+function initAttendanceTab() {
+  const n = new Date();
+  const ym = n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0');
+  if (!document.getElementById('att-month-picker').value)
+    document.getElementById('att-month-picker').value = ym;
+  loadAttendance();
+}
+
+async function loadAttendance() {
+  const month = document.getElementById('att-month-picker').value;
+  if (!month) return;
+  document.getElementById('att-calendar').innerHTML =
+    '<div style="text-align:center;color:var(--muted);font-size:13px;padding:20px">載入中...</div>';
+
+  let data;
+  try {
+    const res = await fetch('/api/punch/my-records?month=' + month);
+    data = await res.json();
+    if (data.error) throw new Error(data.error);
+  } catch(e) {
+    document.getElementById('att-calendar').innerHTML =
+      `<div style="text-align:center;color:var(--red);font-size:13px;padding:20px">${esc(e.message)}</div>`;
+    return;
+  }
+
+  const records = data.records || {};
+  const [y, m] = month.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  // ── Summary strip ────────────────────────────────────────────
+  let totalDays = 0, totalIn = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = month + '-' + String(d).padStart(2,'0');
+    const recs = records[ds] || [];
+    if (recs.length > 0) totalDays++;
+    if (recs.some(r => r.type === 'in')) totalIn++;
+  }
+  document.getElementById('att-summary').innerHTML = `
+    <div style="flex:1;padding:10px 14px;text-align:center;border-right:1px solid var(--border)">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:3px">出勤天數</div>
+      <div style="font-family:'DM Mono',monospace;font-size:22px;font-weight:700;color:var(--navy)">${totalIn}</div>
+    </div>
+    <div style="flex:1;padding:10px 14px;text-align:center;border-right:1px solid var(--border)">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:3px">有紀錄天數</div>
+      <div style="font-family:'DM Mono',monospace;font-size:22px;font-weight:700;color:var(--accent)">${totalDays}</div>
+    </div>
+    <div style="flex:1;padding:10px 14px;text-align:center">
+      <div style="font-size:10px;color:var(--muted);margin-bottom:3px">月份</div>
+      <div style="font-size:14px;font-weight:700;color:var(--navy)">${y}/${String(m).padStart(2,'0')}</div>
+    </div>`;
+
+  // ── Calendar grid ─────────────────────────────────────────────
+  const firstWd = new Date(y, m-1, 1).getDay();
+  let html = `
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
+      ${['日','一','二','三','四','五','六'].map((d,i)=>
+        `<div style="text-align:center;font-size:10px;font-weight:700;padding:5px 0;
+          color:${i===0?'var(--red)':i===6?'var(--accent)':'var(--muted)'}">${d}</div>`
+      ).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px">`;
+
+  for (let i = 0; i < firstWd; i++) html += '<div></div>';
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const ds = month + '-' + String(day).padStart(2,'0');
+    const dt = new Date(y, m-1, day);
+    const wd = dt.getDay();
+    const isFuture = dt > today;
+    const recs = records[ds] || [];
+    const hasIn  = recs.some(r => r.type === 'in');
+    const hasOut = recs.some(r => r.type === 'out');
+
+    // Day cell background
+    let cellBg = '#fff', cellBorder = 'var(--border)';
+    if (recs.length > 0) {
+      cellBg = hasIn ? '#edfaf4' : '#fef3e8';
+      cellBorder = hasIn ? '#a8dfc5' : '#f5c0a0';
+    }
+    if (isFuture) { cellBg='#fafafa'; cellBorder='var(--border)'; }
+
+    const dayColor = wd===0 ? 'var(--red)' : wd===6 ? 'var(--accent)' : 'var(--text)';
+
+    // Punch record rows inside the cell
+    const recRows = recs.map(r => {
+      const manual = r.is_manual ? '<span style="font-size:8px;color:var(--orange)">補</span>' : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;
+        padding:1px 3px;border-radius:3px;margin-top:2px;
+        background:${ATT_BG[r.type]||'var(--bg)'}">
+        <span style="font-size:9px;font-weight:700;color:${ATT_COLOR[r.type]||'var(--muted)'}">${r.label}</span>
+        <span style="font-family:'DM Mono',monospace;font-size:9px;font-weight:600;color:${ATT_COLOR[r.type]||'var(--muted)'}">
+          ${r.time}${manual}
+        </span>
+      </div>`;
+    }).join('');
+
+    html += `<div style="border:1.5px solid ${cellBorder};border-radius:8px;background:${cellBg};
+      padding:5px 5px 4px;min-height:54px;opacity:${isFuture?'.4':'1'}">
+      <div style="font-family:'DM Mono',monospace;font-size:12px;font-weight:700;
+        color:${recs.length?'var(--navy)':dayColor};margin-bottom:1px">${day}</div>
+      ${recRows}
+      ${recs.length===0 && !isFuture ? '<div style="font-size:9px;color:var(--border);margin-top:4px;text-align:center">—</div>' : ''}
+    </div>`;
+  }
+  html += '</div>';
+
+  // Legend
+  html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:11px;color:var(--muted)">
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--green-light);border:1px solid #a8dfc5;margin-right:3px"></span>上班</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--red-light);border:1px solid #f5c0c0;margin-right:3px"></span>下班</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--orange-light);border:1px solid #f5c0a0;margin-right:3px"></span>休息開始</span>
+    <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--accent-light);border:1px solid #c0d0f5;margin-right:3px"></span>休息結束</span>
+    <span style="color:var(--orange)">補 = 補打卡</span>
+  </div>`;
+
+  document.getElementById('att-calendar').innerHTML = html;
 }
 
 </script>
