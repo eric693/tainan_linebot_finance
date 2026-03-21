@@ -3220,60 +3220,110 @@ def _build_richmenu_body(gps_required):
     }
 
 
+def _find_cjk_font():
+    """Find a CJK font on this system, return path or None."""
+    import os, subprocess
+    candidates = [
+        # Noto CJK variants
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/noto-cjk/NotoSansCJKtc-Regular.otf',
+        '/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc',
+        # wqy
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        # arphic
+        '/usr/share/fonts/truetype/arphic/ukai.ttc',
+        '/usr/share/fonts/truetype/arphic/uming.ttc',
+        # Render might have these
+        '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
+        '/usr/share/fonts/truetype/fonts-japanese-gothic.ttf',
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            print(f"[RICHMENU] Found font: {p}")
+            return p
+    # Try fc-list as last resort
+    try:
+        out = subprocess.check_output(
+            ['fc-list', ':lang=zh', '--format=%{file}\n'], timeout=5
+        ).decode('utf-8', errors='ignore')
+        for line in out.strip().split('\n'):
+            line = line.strip()
+            if line and os.path.exists(line):
+                print(f"[RICHMENU] fc-list font: {line}")
+                return line
+    except Exception:
+        pass
+    print("[RICHMENU] No CJK font found, will use embedded fallback")
+    return None
+
+
+def _make_richmenu_png():
+    """Generate the 2500x843 rich menu PNG bytes."""
+    import io, os
+    from PIL import Image, ImageDraw, ImageFont
+
+    W, H = 2500, 843
+    img  = Image.new('RGB', (W, H), '#0f1c3a')
+    draw = ImageDraw.Draw(img)
+
+    panels = [
+        (0,    0,   1250, 421, '#2e9e6b', '上班打卡'),
+        (1250, 0,   2500, 421, '#d64242', '下班打卡'),
+        (0,    422, 1250, 843, '#e07b2a', '休息開始'),
+        (1250, 422, 2500, 843, '#4a7bda', '休息結束'),
+    ]
+
+    font_path = _find_cjk_font()
+    SIZE = 180
+    font_zh = None
+    if font_path:
+        try:
+            font_zh = ImageFont.truetype(font_path, SIZE)
+        except Exception as e:
+            print(f"[RICHMENU] truetype load failed: {e}")
+
+    if not font_zh:
+        # Last resort: embed a minimal subset via Pillow's built-in
+        # Use a large default and accept ASCII-only
+        try:
+            font_zh = ImageFont.load_default(size=SIZE)
+        except Exception:
+            font_zh = ImageFont.load_default()
+        print("[RICHMENU] Using default font (no CJK support)")
+
+    DIVIDER = 6
+    for x1, y1, x2, y2, color, zh in panels:
+        draw.rectangle([x1 + DIVIDER//2, y1 + DIVIDER//2,
+                        x2 - DIVIDER//2 - 1, y2 - DIVIDER//2 - 1], fill=color)
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        try:
+            bb = draw.textbbox((0, 0), zh, font=font_zh)
+            tw, th = bb[2] - bb[0], bb[3] - bb[1]
+            draw.text((cx - tw // 2, cy - th // 2), zh, fill='#ffffff', font=font_zh)
+        except Exception as e:
+            print(f"[RICHMENU] draw text error: {e}")
+
+    draw.rectangle([1248, 0, 1252, H], fill='#0f1c3a')
+    draw.rectangle([0, 419, W, 423],   fill='#0f1c3a')
+
+    buf = io.BytesIO()
+    img.save(buf, 'PNG', optimize=True)
+    return buf.getvalue()
+
+
 def _create_richmenu_image(rich_menu_id, cfg, gps_required):
-    """Generate a 2500x843 PNG with large Chinese text and upload to LINE."""
+    """Generate a 2500x843 PNG with Chinese text labels and upload to LINE."""
     import io
 
     token = cfg.get('channel_access_token', '')
 
     try:
-        from PIL import Image, ImageDraw, ImageFont
-
-        W, H = 2500, 843
-        img  = Image.new('RGB', (W, H), '#0f1c3a')
-        draw = ImageDraw.Draw(img)
-
-        panels = [
-            (0,    0,   1250, 421, '#2e9e6b', '上班打卡'),
-            (1250, 0,   2500, 421, '#d64242', '下班打卡'),
-            (0,    422, 1250, 843, '#e07b2a', '休息開始'),
-            (1250, 422, 2500, 843, '#4a7bda', '休息結束'),
-        ]
-
-        FONT_PATHS_ZH = [
-            '/usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc',
-            '/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc',
-            '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-            '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
-        ]
-
-        font_zh = None
-        for fp in FONT_PATHS_ZH:
-            try:
-                font_zh = ImageFont.truetype(fp, 180)
-                break
-            except Exception:
-                pass
-        if not font_zh:
-            font_zh = ImageFont.load_default()
-
-        DIVIDER = 6
-
-        for x1, y1, x2, y2, color, zh in panels:
-            draw.rectangle([x1 + DIVIDER//2, y1 + DIVIDER//2,
-                            x2 - DIVIDER//2 - 1, y2 - DIVIDER//2 - 1], fill=color)
-            cx = (x1 + x2) // 2
-            cy = (y1 + y2) // 2
-            bb = draw.textbbox((0, 0), zh, font=font_zh)
-            tw, th = bb[2] - bb[0], bb[3] - bb[1]
-            draw.text((cx - tw // 2, cy - th // 2), zh, fill='#ffffff', font=font_zh)
-
-        draw.rectangle([1248, 0, 1252, H], fill='#0f1c3a')
-        draw.rectangle([0, 419, W, 423],   fill='#0f1c3a')
-
-        buf = io.BytesIO()
-        img.save(buf, 'PNG', optimize=True)
-        png_bytes = buf.getvalue()
+        png_bytes = _make_richmenu_png()
         print(f"[RICHMENU] Generated PNG: {len(png_bytes)} bytes")
 
     except Exception as e:
@@ -3362,6 +3412,19 @@ def api_richmenu_create():
         'set_default': status2 in (200, 204)
     })
 
+
+
+@app.route('/api/line-punch/richmenu/preview-image')
+@login_required
+def api_richmenu_preview_image():
+    """Return the rich menu PNG directly for browser preview/download."""
+    try:
+        from flask import Response
+        png_bytes = _make_richmenu_png()
+        return Response(png_bytes, mimetype='image/png',
+                        headers={'Content-Disposition': 'inline; filename="richmenu.png"'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/line-punch/richmenu/list', methods=['GET'])
 @login_required
