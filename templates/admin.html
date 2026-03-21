@@ -1036,14 +1036,44 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
   <div class="page" id="page-sched" style="display:none">
 
     <div class="inv-tab-bar">
-      <button class="inv-tab active" id="schedtab-calendar" onclick="switchSchedTab('calendar')">月曆總覽</button>
+      <button class="inv-tab active" id="schedtab-shift"    onclick="switchSchedTab('shift')">班別排班</button>
+      <button class="inv-tab"        id="schedtab-shifttypes" onclick="switchSchedTab('shifttypes')">班別設定</button>
+      <button class="inv-tab"        id="schedtab-calendar" onclick="switchSchedTab('calendar')">排休月曆</button>
       <button class="inv-tab"        id="schedtab-requests" onclick="switchSchedTab('requests')">排休申請</button>
       <button class="inv-tab"        id="schedtab-summary"  onclick="switchSchedTab('summary')">人員摘要</button>
       <button class="inv-tab"        id="schedtab-config"   onclick="switchSchedTab('config')">月份設定</button>
     </div>
 
+    <!-- ── 班別排班（嵌入排班管理） ── -->
+    <div id="sched-panel-shift">
+      <div class="filter-bar" style="margin-bottom:16px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="shift-month" onchange="loadShiftCalendar()">
+        <span style="flex:1"></span>
+        <button class="btn btn-primary btn-sm" onclick="openShiftAssignModal()">指派班別</button>
+        <button class="btn btn-outline btn-sm" onclick="loadShiftCalendar()">重新整理</button>
+      </div>
+      <div id="shift-cal-wrap"></div>
+    </div>
+
+    <!-- ── 班別設定 ── -->
+    <div id="sched-panel-shifttypes" style="display:none">
+      <div class="section-head">
+        <span style="font-size:12px;color:var(--muted)">設定工作班別與時間，可指定適用部門</span>
+        <button class="btn btn-primary" onclick="openShiftTypeModal()">新增班別</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>班別名稱</th><th>上班時間</th><th>下班時間</th><th>適用部門</th><th>顏色</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="shift-types-tbody"><tr><td colspan="7" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- ── 月曆總覽 ── -->
-    <div id="sched-panel-calendar">
+    <div id="sched-panel-calendar" style="display:none">
       <div class="filter-bar" style="margin-bottom:20px;gap:12px;flex-wrap:wrap">
         <span class="filter-label">月份</span>
         <input class="filter-input" type="month" id="sched-cal-month" onchange="loadSchedCalendar()">
@@ -1199,44 +1229,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
 
   <!-- ── 班別排班 ──────────────────────────── -->
-  <div class="page" id="page-shift" style="display:none">
 
-    <div class="inv-tab-bar">
-      <button class="inv-tab active" id="shifttab-schedule" onclick="switchShiftTab('schedule')">排班指派</button>
-      <button class="inv-tab"        id="shifttab-types"    onclick="switchShiftTab('types')">班別設定</button>
-    </div>
-
-    <!-- ── 排班指派 ── -->
-    <div id="shift-panel-schedule">
-      <div class="filter-bar" style="margin-bottom:16px;gap:12px;flex-wrap:wrap">
-        <span class="filter-label">月份</span>
-        <input class="filter-input" type="month" id="shift-month" onchange="loadShiftCalendar()">
-        <span style="flex:1"></span>
-        <button class="btn btn-primary btn-sm" onclick="openShiftAssignModal()">指派班別</button>
-        <button class="btn btn-outline btn-sm" onclick="loadShiftCalendar()">重新整理</button>
-      </div>
-
-      <!-- Month calendar grid -->
-      <div id="shift-cal-wrap"></div>
-    </div>
-
-    <!-- ── 班別設定 ── -->
-    <div id="shift-panel-types" style="display:none">
-      <div class="section-head">
-        <span style="font-size:12px;color:var(--muted)">設定工作班別與時間，可指定適用部門</span>
-        <button class="btn btn-primary" onclick="openShiftTypeModal()">新增班別</button>
-      </div>
-      <div class="card">
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>班別名稱</th><th>上班時間</th><th>下班時間</th><th>適用部門</th><th>顏色</th><th>狀態</th><th>操作</th></tr></thead>
-            <tbody id="shift-types-tbody"><tr><td colspan="7" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-  </div><!-- end page-shift -->
 
 </main>
 
@@ -1847,11 +1840,11 @@ function showPage(page, e) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
   setTimeout(refreshBadges, 600);
-  ['records','charts','summary','ocr','inv','punch','sched','shift','salary'].forEach(p =>
+  ['records','charts','summary','ocr','inv','punch','sched','salary'].forEach(p =>
     document.getElementById('page-' + p).style.display = p === page ? '' : 'none'
   );
   document.getElementById('page-title').textContent =
-    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理', sched: '排班管理', shift: '班別排班', salary: '薪資管理' }[page];
+    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理', sched: '排班管理', salary: '薪資管理' }[page];
   document.getElementById('new-btn').style.display = page === 'records' ? '' : 'none';
   if (page === 'records') loadRecords();
   if (page === 'charts')  { initChartDefaults(); renderCharts(); }
@@ -1860,7 +1853,6 @@ function showPage(page, e) {
   if (page === 'inv')     initInv();
   if (page === 'punch')   initPunch();
   if (page === 'sched')   initSched();
-  if (page === 'shift')   initShift();
   if (page === 'salary')  initSalary();
 }
 
@@ -3808,22 +3800,25 @@ let schedCurMonth = null;
 function initSched() {
   const now = new Date();
   const ym  = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  ['sched-cal-month','sched-req-month','sched-sum-month','cfg-month'].forEach(id => {
-    if (!document.getElementById(id).value)
-      document.getElementById(id).value = ym;
+  ['sched-cal-month','sched-req-month','sched-sum-month','cfg-month','shift-month','sam-month'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el.value) el.value = ym;
   });
-  switchSchedTab('calendar');
+  switchSchedTab('shift');
 }
 
 function switchSchedTab(tab) {
-  ['calendar','requests','summary','config'].forEach(t => {
+  ['shift','shifttypes','calendar','requests','summary','config'].forEach(t => {
     document.getElementById('schedtab-' + t).classList.toggle('active', t === tab);
-    document.getElementById('sched-panel-' + t).style.display = t === tab ? '' : 'none';
+    const panel = document.getElementById('sched-panel-' + t) || document.getElementById('shift-panel-' + (t === 'shift' ? 'schedule' : t === 'shifttypes' ? 'types' : t));
+    if (panel) panel.style.display = t === tab ? '' : 'none';
   });
-  if (tab === 'calendar') loadSchedCalendar();
-  if (tab === 'requests') loadSchedRequests();
-  if (tab === 'summary')  loadSchedSummary();
-  if (tab === 'config')   loadSchedConfig();
+  if (tab === 'shift')      { loadShiftCalendar(); }
+  if (tab === 'shifttypes') { loadShiftTypes(); }
+  if (tab === 'calendar')   loadSchedCalendar();
+  if (tab === 'requests')   loadSchedRequests();
+  if (tab === 'summary')    loadSchedSummary();
+  if (tab === 'config')     loadSchedConfig();
 }
 
 // ── 月曆總覽 ──────────────────────────────────────────────────
@@ -4966,22 +4961,7 @@ let shiftEditTypeId = null;
 let samSelectedDates = new Set();
 let samSelectedStaff = new Set();
 
-function initShift() {
-  const n  = new Date();
-  const ym = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;
-  if (!document.getElementById('shift-month').value)
-    document.getElementById('shift-month').value = ym;
-  switchShiftTab('schedule');
-}
-
-function switchShiftTab(tab) {
-  ['schedule','types'].forEach(t => {
-    document.getElementById('shifttab-' + t).classList.toggle('active', t === tab);
-    document.getElementById('shift-panel-' + t).style.display = t === tab ? '' : 'none';
-  });
-  if (tab === 'schedule') loadShiftCalendar();
-  if (tab === 'types')    loadShiftTypes();
-}
+// initShift and switchShiftTab merged into initSched/switchSchedTab
 
 // ── 月曆排班視圖 ───────────────────────────────────────────────
 async function loadShiftCalendar() {
