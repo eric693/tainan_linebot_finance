@@ -333,6 +333,15 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
             </div>
           </div>
           <div id="ot-hours-preview" style="font-size:12px;color:var(--accent);margin-bottom:10px;min-height:16px"></div>
+          <div style="margin-bottom:10px">
+            <div class="fl">加班日別</div>
+            <select class="fi" id="ot-day-type" onchange="updateOTHoursPreview()" style="margin-bottom:0">
+              <option value="weekday">平日（前2h×1.33，後續×1.67）</option>
+              <option value="rest_day">休息日（最少4h，前2h×1.33，後續×1.67）</option>
+              <option value="holiday">國定假日（全程×2倍）</option>
+              <option value="special">例假日（全程×2倍）</option>
+            </select>
+          </div>
           <div style="margin-bottom:14px">
             <div class="fl">加班原因 *</div>
             <input class="fi" id="ot-reason" placeholder="例：客戶急件、備料作業" style="margin-bottom:0">
@@ -1242,19 +1251,29 @@ function initOTTab() {
 }
 
 function updateOTHoursPreview() {
-  const s = document.getElementById('ot-start').value;
-  const e = document.getElementById('ot-end').value;
+  const s  = document.getElementById('ot-start').value;
+  const e  = document.getElementById('ot-end').value;
+  const dt = document.getElementById('ot-day-type')?.value || 'weekday';
   const el = document.getElementById('ot-hours-preview');
   if (!s || !e) { el.textContent = ''; return; }
   const [sh,sm] = s.split(':').map(Number);
   const [eh,em] = e.split(':').map(Number);
   let mins = (eh*60+em) - (sh*60+sm);
   if (mins <= 0) mins += 24*60;
-  const hrs = (mins/60).toFixed(1);
-  const h1  = Math.min(mins/60, 2).toFixed(1);
-  const h2  = Math.max(0, mins/60 - 2).toFixed(1);
-  el.innerHTML = `<strong>加班時數：${hrs} 小時</strong>
-    （前 ${h1}h × 1.33 + 後 ${h2}h × 1.67）`;
+  const hrs = (mins/60).toFixed(2)*1;
+  const DT_LABEL = {weekday:'平日',rest_day:'休息日',holiday:'國定假日',special:'例假日'};
+  let detail = '';
+  if (dt === 'rest_day') {
+    const billed = Math.max(hrs, 4);
+    const h1 = Math.min(billed,2).toFixed(1), h2 = Math.max(0,billed-2).toFixed(1);
+    detail = `休息日（實際 ${hrs}h，計費 ${billed}h）：前 ${h1}h×1.33 + 後 ${h2}h×1.67`;
+  } else if (dt === 'holiday' || dt === 'special') {
+    detail = `${DT_LABEL[dt]}：${hrs}h × 2 倍`;
+  } else {
+    const h1 = Math.min(hrs,2).toFixed(1), h2 = Math.max(0,hrs-2).toFixed(1);
+    detail = `平日：前 ${h1}h×1.33 + 後 ${h2}h×1.67`;
+  }
+  el.innerHTML = `<strong>加班時數：${hrs} 小時</strong>　<span style="color:var(--muted)">${detail}</span>`;
 }
 
 async function submitOTRequest() {
@@ -1267,9 +1286,10 @@ async function submitOTRequest() {
   }
   if (!reason) { showToast('請填寫加班原因','err'); return; }
   try {
+    const day_type = document.getElementById('ot-day-type')?.value || 'weekday';
     const res = await fetch('/api/overtime/my-requests', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ request_date, start_time, end_time, reason })
+      body: JSON.stringify({ request_date, start_time, end_time, reason, day_type })
     });
     const d = await res.json();
     if (!res.ok) { showToast(d.error||'送出失敗','err'); return; }
@@ -1295,7 +1315,9 @@ async function loadMyOTRequests() {
     return `<div style="border:1.5px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:10px">
       <div style="padding:10px 14px;background:var(--bg);display:flex;justify-content:space-between;align-items:center">
         <div>
-          <div style="font-size:13px;font-weight:700">${r.request_date}　${r.start_time}～${r.end_time}</div>
+          <div style="font-size:13px;font-weight:700">${r.request_date}　${r.start_time}～${r.end_time}
+          <span style="font-size:11px;font-weight:400;background:var(--bg);padding:1px 6px;border-radius:8px;margin-left:6px">${{weekday:'平日',rest_day:'休息日',holiday:'國定假日',special:'例假日'}[r.day_type||'weekday']}</span>
+        </div>
           <div style="font-size:12px;color:var(--muted);margin-top:2px">加班 <strong>${r.ot_hours}</strong> 小時</div>
         </div>
         <span style="font-size:12px;font-weight:700;color:${sc};padding:3px 10px;border-radius:10px;background:${sc}22">${sl}</span>

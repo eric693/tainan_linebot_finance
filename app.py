@@ -443,6 +443,7 @@ def init_db():
         "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS ot_rate2 NUMERIC(4,2) DEFAULT 1.67",
         "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS salary_type TEXT DEFAULT 'monthly'",
         "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(12,2) DEFAULT 0",
+        "ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS day_type TEXT DEFAULT 'weekday'",
     ]
     for sql in migrations:
         try:
@@ -4108,28 +4109,57 @@ def ot_req_row(row):
     if d.get('created_at'):   d['created_at']    = d['created_at'].isoformat()
     return d
 
-def _calc_ot_pay(staff_row, ot_hours):
-    """Calculate overtime pay based on salary type."""
+# Day type labels for display
+DAY_TYPE_LABEL = {
+    'weekday':  '平日',
+    'rest_day': '休息日',
+    'holiday':  '國定假日',
+    'special':  '例假日',
+}
+
+def _calc_ot_pay(staff_row, ot_hours, day_type='weekday'):
+    """Calculate overtime pay based on salary type and day type.
+    day_type: weekday | rest_day | holiday | special
+    Taiwan Labor Standards Act:
+      - weekday:  first 2h × 1.33, beyond × 1.67
+      - rest_day: first 2h × 1.33, beyond × 1.67, minimum billed = 4h
+      - holiday:  full hours × 2.0 (double pay)
+      - special:  full hours × 2.0 (double pay, rarely allowed)
+    """
     salary_type = staff_row.get('salary_type', 'monthly') or 'monthly'
-    base_salary  = float(staff_row.get('base_salary')  or 0)
-    hourly_rate  = float(staff_row.get('hourly_rate')  or 0)
-    daily_hours  = float(staff_row.get('daily_hours')  or 8)
-    ot_rate1     = float(staff_row.get('ot_rate1')     or 1.33)
-    ot_rate2     = float(staff_row.get('ot_rate2')     or 1.67)
+    base_salary = float(staff_row.get('base_salary')  or 0)
+    hourly_rate = float(staff_row.get('hourly_rate')  or 0)
+    daily_hours = float(staff_row.get('daily_hours')  or 8)
+    ot_rate1    = float(staff_row.get('ot_rate1')     or 1.33)
+    ot_rate2    = float(staff_row.get('ot_rate2')     or 1.67)
 
     if salary_type == 'hourly':
         base_hourly = hourly_rate
     else:
-        # Monthly: hourly = monthly / 30 / daily_hours  (勞基法標準換算)
         base_hourly = base_salary / 30 / daily_hours if (base_salary and daily_hours) else 0
 
     if base_hourly <= 0:
         return 0.0, base_hourly
 
     h = float(ot_hours)
-    h1 = min(h, 2.0)            # first 2h → rate1
-    h2 = max(0.0, h - 2.0)      # beyond 2h → rate2
-    pay = round(base_hourly * (h1 * ot_rate1 + h2 * ot_rate2), 0)
+
+    if day_type in ('holiday', 'special'):
+        # 國定假日 / 例假日：全部 2 倍（已含原薪，加給 1 倍）
+        pay = round(base_hourly * h * 2.0, 0)
+
+    elif day_type == 'rest_day':
+        # 休息日：最少計 4 小時，前 2h × 1.33，後續 × 1.67
+        billed = max(h, 4.0)
+        h1  = min(billed, 2.0)
+        h2  = max(0.0, billed - 2.0)
+        pay = round(base_hourly * (h1 * ot_rate1 + h2 * ot_rate2), 0)
+
+    else:
+        # 平日加班：前 2h × 1.33，後續 × 1.67
+        h1  = min(h, 2.0)
+        h2  = max(0.0, h - 2.0)
+        pay = round(base_hourly * (h1 * ot_rate1 + h2 * ot_rate2), 0)
+
     return pay, base_hourly
 
 def _ensure_ot_cols(conn):
@@ -4165,6 +4195,9 @@ def api_ot_submit():
     start_time   = b.get('start_time','').strip()
     end_time     = b.get('end_time','').strip()
     reason       = b.get('reason','').strip()
+    day_type     = b.get('day_type','weekday').strip()
+    if day_type not in ('weekday','rest_day','holiday','special'):
+        day_type = 'weekday'
 
     if not request_date or not start_time or not end_time:
         return jsonify({'error': '請填寫加班日期及時間'}), 400
@@ -4186,11 +4219,13 @@ def api_ot_submit():
 
     with get_db() as conn:
         _ensure_ot_cols(conn)
+        try: conn.execute("ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS day_type TEXT DEFAULT 'weekday'")
+        except Exception: pass
         row = conn.execute("""
             INSERT INTO overtime_requests
-              (staff_id, request_date, start_time, end_time, ot_hours, reason)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
-        """, (sid, request_date, start_time, end_time, ot_hours, reason)).fetchone()
+              (staff_id, request_date, start_time, end_time, ot_hours, reason, day_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *
+        """, (sid, request_date, start_time, end_time, ot_hours, reason, day_type)).fetchone()
     return jsonify(ot_req_row(row)), 201
 
 # ── Admin: list / review ─────────────────────────────────────────
@@ -4239,7 +4274,8 @@ def api_ot_review(rid):
             """, (req['staff_id'],)).fetchone()
 
             if staff:
-                ot_pay_final, _ = _calc_ot_pay(staff, req['ot_hours'] or 0)
+                dtype = req.get('day_type','weekday') or 'weekday'
+                ot_pay_final, _ = _calc_ot_pay(staff, req['ot_hours'] or 0, dtype)
 
         row = conn.execute("""
             UPDATE overtime_requests SET
@@ -4281,9 +4317,15 @@ def api_ot_calc_preview():
             FROM punch_staff WHERE id=%s
         """, (staff_id,)).fetchone()
     if not staff: return ('', 404)
-    ot_pay, base_hourly = _calc_ot_pay(staff, ot_hours)
-    h1 = min(ot_hours, 2.0)
-    h2 = max(0.0, ot_hours - 2.0)
+    day_type = b.get('day_type','weekday') or 'weekday'
+    ot_pay, base_hourly = _calc_ot_pay(staff, ot_hours, day_type)
+    if day_type == 'rest_day':
+        billed = max(ot_hours, 4.0)
+        h1 = min(billed, 2.0); h2 = max(0.0, billed - 2.0)
+    elif day_type in ('holiday','special'):
+        h1 = ot_hours; h2 = 0.0
+    else:
+        h1 = min(ot_hours, 2.0); h2 = max(0.0, ot_hours - 2.0)
     return jsonify({
         'staff_name':    staff['name'],
         'salary_type':   staff.get('salary_type','monthly'),
@@ -4291,6 +4333,7 @@ def api_ot_calc_preview():
         'hourly_rate':   float(staff.get('hourly_rate') or 0),
         'base_hourly':   round(base_hourly, 2),
         'ot_hours':      ot_hours,
+        'day_type':      day_type,
         'h1':            h1,
         'h2':            h2,
         'ot_rate1':      float(staff.get('ot_rate1') or 1.33),
