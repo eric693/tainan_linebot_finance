@@ -41,7 +41,7 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
 /* ── Tab bar ── */
 .tab-bar{display:flex;background:var(--navy-mid);border-bottom:1px solid rgba(255,255,255,.08)}
 .tab{flex:1;padding:13px 8px;text-align:center;font-family:"Noto Sans TC",sans-serif;font-size:13px;font-weight:600;color:rgba(255,255,255,.45);cursor:pointer;border:none;background:transparent;transition:all .15s;border-bottom:3px solid transparent}
-.tab-badge{display:inline-flex;align-items:center;justify-content:center;background:#e53e3e;color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;padding:0 4px;margin-left:4px;vertical-align:middle}
+.tab-badge{display:inline-flex;align-items:center;justify-content:center;background:#e53e3e;color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;padding:0 4px;margin-left:4px;vertical-align:middle;pointer-events:none}
 .tab.active{color:#fff;border-bottom-color:var(--gold)}
 .tab-body{padding:20px}
 
@@ -185,8 +185,8 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
 
       <!-- Tab bar -->
       <div class="tab-bar">
-        <button class="tab active" id="tab-punch" onclick="switchTab('punch')">打卡<span class="tab-badge" id="staff-badge-punch" style="display:none"></span></button>
-        <button class="tab"        id="tab-sched" onclick="switchTab('sched')">排休申請<span class="tab-badge" id="staff-badge-sched" style="display:none"></span></button>
+        <button class="tab active" id="tab-punch" onclick="switchTab('punch')">打卡<span class="tab-badge" id="tbadge-punch" style="display:none"></span></button>
+        <button class="tab"        id="tab-sched" onclick="switchTab('sched')">排休申請<span class="tab-badge" id="tbadge-sched" style="display:none"></span></button>
         <button class="tab"        id="tab-schedule-view" onclick="switchTab('schedule-view')">我的排班</button>
       <button class="tab"        id="tab-attendance"    onclick="switchTab('attendance')">出勤月曆</button>
       <button class="tab"        id="tab-salary"        onclick="switchTab('salary')">薪資查詢</button>
