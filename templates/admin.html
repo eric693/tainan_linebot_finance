@@ -1434,7 +1434,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeShiftAssignModal()">取消</button>
-      <button class="btn btn-danger" onclick="deleteShiftAssign()" id="sam-delete-btn" style="display:none">刪除選取</button>
+      <button class="btn btn-danger" onclick="deleteShiftAssign()" id="sam-delete-btn" style="display:none">🗑 刪除此排班</button>
       <button class="btn btn-primary" onclick="saveShiftAssign()">儲存指派</button>
     </div>
   </div>
@@ -5092,7 +5092,7 @@ async function openShiftAssignModal(prefillDate=null, prefillStaffId=null) {
   samSelectedDates = new Set();
   samSelectedStaff = new Set();
   if (prefillDate)    samSelectedDates.add(prefillDate);
-  if (prefillStaffId) samSelectedStaff.add(prefillStaffId);
+  if (prefillStaffId) samSelectedStaff.add(parseInt(prefillStaffId));
 
   // Load latest data
   if (!shiftTypes.length) shiftTypes = await fetch('/api/shifts/types').then(r=>r.json()).then(d=>d.filter(t=>t.active));
@@ -5119,7 +5119,20 @@ async function openShiftAssignModal(prefillDate=null, prefillStaffId=null) {
   const m = prefillDate ? prefillDate.slice(0,7) : document.getElementById('shift-month').value;
   document.getElementById('sam-month').value = m;
 
-  document.getElementById('sam-note').value = '';
+  // Pre-select existing shift type if editing
+  if (prefillDate && prefillStaffId) {
+    const existing = shiftAssigns.find(a => a.shift_date === prefillDate && a.staff_id === parseInt(prefillStaffId));
+    if (existing) {
+      const sel = document.getElementById('sam-shift-type');
+      if (sel) sel.value = existing.shift_type_id;
+      document.getElementById('sam-note').value = existing.note || '';
+    } else {
+      document.getElementById('sam-note').value = '';
+    }
+  } else {
+    document.getElementById('sam-note').value = '';
+  }
+
   document.getElementById('sam-delete-btn').style.display = prefillDate && prefillStaffId ? '' : 'none';
   renderSamCalendar();
   document.getElementById('shift-assign-modal').style.display = 'flex';
@@ -5210,7 +5223,13 @@ async function deleteShiftAssign() {
   const staffIds = [...samSelectedStaff];
   const dates    = [...samSelectedDates].sort();
   if (!staffIds.length || !dates.length) { showToast('請先選擇員工和日期', 'error'); return; }
-  if (!confirm(`確定刪除 ${staffIds.length} 位員工共 ${dates.length} 天的排班？`)) return;
+  // Single cell delete: show simple confirm
+  const isSingle = staffIds.length === 1 && dates.length === 1;
+  const staffName = punchStaffList.find(s=>s.id===staffIds[0])?.name || '';
+  const msg = isSingle
+    ? `確定刪除「${staffName}」${dates[0]} 的排班？`
+    : `確定刪除 ${staffIds.length} 位員工共 ${dates.length} 天的排班？`;
+  if (!confirm(msg)) return;
   const res  = await fetch('/api/shifts/assignments/batch-delete', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ staff_ids: staffIds, dates })
