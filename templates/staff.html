@@ -683,11 +683,18 @@ async function submitSchedRequest(){
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({month:curSchedMonth,dates,submit_note:note})
     });
-    const d=await res.json();
-    if(!res.ok){showToast(d.error||'送出失敗','err');return;}
+    let d;
+    try{ d=await res.json(); } catch(e){ d={error:'伺服器回應格式錯誤'}; }
+    if(!res.ok){
+      showToast(d.error||`送出失敗（${res.status}）`,'err');
+      return;
+    }
     showToast('申請送出成功','ok');
     schedExistingReq=d; renderStatusArea(); renderCalendar();
-  }catch(e){showToast('網路錯誤','err');}
+  }catch(e){
+    showToast('連線失敗，請檢查網路後重試','err');
+    console.error('submitSchedRequest error',e);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

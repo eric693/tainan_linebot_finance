@@ -2090,82 +2090,94 @@ def api_sched_submit():
     if not isinstance(dates, list):
         return jsonify({'error': '日期格式錯誤'}), 400
 
-    # Validate all dates belong to the month
+    # Validate dates belong to the month
     for d in dates:
         if not d.startswith(month):
             return jsonify({'error': f'日期 {d} 不屬於 {month}'}), 400
 
-    with get_db() as conn:
-        cfg    = get_schedule_config(conn, month)
-        counts = get_off_counts(conn, month)
+    try:
+        with get_db() as conn:
+            cfg = get_schedule_config(conn, month)
 
-        # Check quota
-        if len(dates) > cfg['vacation_quota']:
-            return jsonify({
-                'error': f'申請天數（{len(dates)}天）超過本月配額（{cfg["vacation_quota"]}天）'
-            }), 422
+            # Check quota
+            if len(dates) > cfg['vacation_quota']:
+                return jsonify({
+                    'error': f'申請天數（{len(dates)}天）超過本月配額（{cfg["vacation_quota"]}天）'
+                }), 422
 
-        # Check per-day max (exclude self)
-        existing = conn.execute(
-            "SELECT dates FROM schedule_requests WHERE staff_id=%s AND month=%s",
-            (sid, month)
-        ).fetchone()
-        my_old_dates = set()
-        if existing:
-            old = existing['dates']
-            if isinstance(old, str):
-                try: old = _json.loads(old)
-                except: old = []
-            my_old_dates = set(old)
+            # Check per-day max (exclude self)
+            overcrowded = []
+            for d in dates:
+                try:
+                    others = conn.execute("""
+                        SELECT COUNT(*) as cnt
+                        FROM schedule_requests,
+                             jsonb_array_elements_text(dates) as elem
+                        WHERE month=%s AND status IN ('approved','pending')
+                          AND staff_id != %s AND elem=%s
+                    """, (month, sid, d)).fetchone()
+                    others_count = int(others['cnt']) if others else 0
+                except Exception:
+                    others_count = 0
+                if others_count >= cfg['max_off_per_day']:
+                    dt_obj = _dt.strptime(d, '%Y-%m-%d')
+                    overcrowded.append({
+                        'date': d,
+                        'weekday': WEEKDAY_ZH[dt_obj.weekday()],
+                        'count': others_count,
+                        'max': cfg['max_off_per_day']
+                    })
+            if overcrowded:
+                msgs = [f"{x['date']}（{x['weekday']}）已有 {x['count']} 人排休" for x in overcrowded]
+                return jsonify({
+                    'error': '以下日期休假人數已達上限：' + '、'.join(msgs),
+                    'overcrowded': overcrowded
+                }), 422
 
-        # Recalc counts without self
-        overcrowded = []
-        for d in dates:
-            # Count others on this day
-            others = conn.execute("""
-                SELECT COUNT(*) as cnt
-                FROM schedule_requests,
-                     jsonb_array_elements_text(dates) as elem
-                WHERE month=%s AND status IN ('approved','pending')
-                  AND staff_id != %s AND elem=%s
-            """, (month, sid, d)).fetchone()
-            others_count = int(others['cnt']) if others else 0
-            if others_count >= cfg['max_off_per_day']:
-                dt = _dt.strptime(d, '%Y-%m-%d')
-                weekday = WEEKDAY_ZH[dt.weekday()]
-                overcrowded.append({'date': d, 'weekday': weekday,
-                                   'count': others_count, 'max': cfg['max_off_per_day']})
-        if overcrowded:
-            msgs = [f"{x['date']}（{x['weekday']}）已有 {x['count']} 人排休" for x in overcrowded]
-            err_msg = '以下日期休假人數已達上限：' + '、'.join(msgs)
-            return jsonify({'error': err_msg, 'overcrowded': overcrowded}), 422
+            # Determine status
+            prev = conn.execute(
+                "SELECT status FROM schedule_requests WHERE staff_id=%s AND month=%s",
+                (sid, month)
+            ).fetchone()
+            new_status = 'modified_pending' if prev and prev['status'] == 'approved' else 'pending'
+            dates_json = _json.dumps(dates, ensure_ascii=False)
 
-        # Upsert — if approved, go back to modified_pending
-        prev = conn.execute(
-            "SELECT status FROM schedule_requests WHERE staff_id=%s AND month=%s",
-            (sid, month)
-        ).fetchone()
-        new_status = 'modified_pending' if prev and prev['status']=='approved' else 'pending'
-        dates_json = _json.dumps(dates, ensure_ascii=False)
+            # Ensure updated_at column exists (migration guard)
+            try:
+                conn.execute("ALTER TABLE schedule_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()")
+            except Exception:
+                pass
 
-        row = conn.execute("""
-            INSERT INTO schedule_requests
-              (staff_id, month, dates, status, submit_note, updated_at)
-            VALUES (%s, %s, %s::jsonb, %s, %s, NOW())
-            ON CONFLICT (staff_id, month) DO UPDATE
-              SET dates=%s::jsonb, status=%s, submit_note=%s, updated_at=NOW()
-            RETURNING *
-        """, (sid, month, dates_json, new_status, note,
-              dates_json, new_status, note)).fetchone()
+            row = conn.execute("""
+                INSERT INTO schedule_requests
+                  (staff_id, month, dates, status, submit_note, updated_at)
+                VALUES (%s, %s, %s::jsonb, %s, %s, NOW())
+                ON CONFLICT (staff_id, month) DO UPDATE
+                  SET dates        = EXCLUDED.dates,
+                      status       = EXCLUDED.status,
+                      submit_note  = EXCLUDED.submit_note,
+                      updated_at   = NOW()
+                RETURNING *
+            """, (sid, month, dates_json, new_status, note)).fetchone()
 
-    d_objs = []
-    for ds in dates:
-        dt = _dt.strptime(ds, '%Y-%m-%d')
-        d_objs.append({'date': ds, 'weekday': WEEKDAY_ZH[dt.weekday()],
-                       'day': dt.day})
-    resp = sched_req_row(row)
-    resp['date_details'] = d_objs
-    return jsonify(resp), 201
+            result = sched_req_row(row)
+
+        # Build date detail list (outside db context is fine)
+        d_objs = []
+        for ds in dates:
+            dt_obj = _dt.strptime(ds, '%Y-%m-%d')
+            d_objs.append({
+                'date': ds,
+                'weekday': WEEKDAY_ZH[dt_obj.weekday()],
+                'day': dt_obj.day
+            })
+        result['date_details'] = d_objs
+        return jsonify(result), 201
+
+    except Exception as e:
+        import traceback as _tb
+        print(f"[SCHED SUBMIT ERROR] {e}\n{_tb.format_exc()}")
+        return jsonify({'error': f'系統錯誤：{str(e)}'}), 500
 
 # ── Admin schedule API ─────────────────────────────────────────────
 
