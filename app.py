@@ -824,11 +824,14 @@ def handle_message(event):
             )
         return
 
-    # Default: show start menu with date picker
-    line_bot_api.reply_message(
-        event.reply_token,
-        FlexSendMessage(alt_text="財務記帳系統", contents=make_start_flex())
-    )
+    # Trigger accounting only on keyword "交班"
+    TRIGGER_KEYWORDS = ['交班', '記帳', '交班記帳']
+    if text in TRIGGER_KEYWORDS:
+        line_bot_api.reply_message(
+            event.reply_token,
+            FlexSendMessage(alt_text="財務記帳系統", contents=make_start_flex())
+        )
+    # Other messages: ignore (don't reply, avoid interfering with punch bot)
 
 
 @handler.add(PostbackEvent)
