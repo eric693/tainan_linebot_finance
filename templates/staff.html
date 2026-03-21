@@ -1316,7 +1316,7 @@ async function loadMyOTRequests() {
       <div style="padding:10px 14px;background:var(--bg);display:flex;justify-content:space-between;align-items:center">
         <div>
           <div style="font-size:13px;font-weight:700">${r.request_date}　${r.start_time}～${r.end_time}
-          <span style="font-size:11px;font-weight:400;background:var(--bg);padding:1px 6px;border-radius:8px;margin-left:6px">${{weekday:'平日',rest_day:'休息日',holiday:'國定假日',special:'例假日'}[r.day_type||'weekday']}</span>
+          <span style="font-size:11px;font-weight:400;background:var(--bg);padding:1px 6px;border-radius:8px;margin-left:6px">${({weekday:'平日',rest_day:'休息日',holiday:'國定假日',special:'例假日'})[r.day_type||'weekday']||''}</span>
         </div>
           <div style="font-size:12px;color:var(--muted);margin-top:2px">加班 <strong>${r.ot_hours}</strong> 小時</div>
         </div>

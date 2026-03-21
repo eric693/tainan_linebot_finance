@@ -5422,6 +5422,7 @@ async function deleteShiftType(id) {
 // ═══════════════════════════════════════════════════════════════
 let otReqData = [];
 const OT_STATUS_LABEL = {pending:'待審核', approved:'已核准', rejected:'已退回'};
+const OT_STATUS_LABEL_DT = {weekday:'平日', rest_day:'休息日', holiday:'國定假日', special:'例假日'};
 const OT_STATUS_COLOR = {pending:'var(--orange)', approved:'var(--green)', rejected:'var(--red)'};
 
 // salary type toggle in employee modal
@@ -5461,7 +5462,7 @@ function renderOTRequests() {
           ${r.staff_role?`<span style="font-size:12px;color:var(--muted);margin-left:8px">${escHtml(r.staff_role)}</span>`:''}
           <div style="font-size:12px;color:var(--muted);margin-top:3px">
             ${r.request_date}　${r.start_time}～${r.end_time}　<strong>${r.ot_hours}小時</strong>
-            <span style="background:var(--bg);padding:1px 6px;border-radius:8px;margin-left:4px">${{weekday:'平日',rest_day:'休息日',holiday:'國定假日',special:'例假日'}[r.day_type||'weekday']}</span>
+            <span style="background:var(--bg);padding:1px 6px;border-radius:8px;margin-left:4px">${OT_STATUS_LABEL_DT[r.day_type||'weekday']||r.day_type}</span>
             ${payStr}
           </div>
         </div>
