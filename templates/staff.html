@@ -219,7 +219,7 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
         <div id="today-log"></div>
       </div>
 
-      <!-- Request punch button -->
+      <!-- Request punch button — punch tab only -->
       <div style="padding:10px 20px;border-top:1px solid var(--border)">
         <button class="btn btn-outline" style="width:100%;font-size:13px" onclick="showReqPanel()">申請補打卡</button>
       </div>
@@ -248,7 +248,6 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
           <button class="btn btn-outline" style="flex:1" onclick="hideReqPanel()">取消</button>
           <button class="btn btn-primary" style="flex:2" onclick="submitPunchReq()">送出申請</button>
         </div>
-
         <!-- My requests history -->
         <div id="my-reqs" style="margin-top:16px;display:none">
           <div class="section-label" style="margin-bottom:8px">我的申請記錄</div>
@@ -422,6 +421,15 @@ function switchTab(tab){
     document.getElementById('panel-'+t).style.display=t===tab?'':'none';
   });
   document.getElementById('today-log-wrap').style.display=tab==='punch'?'':'none';
+  // Hide punch request panel when leaving punch tab
+  if(tab!=='punch'){
+    document.getElementById('req-panel').style.display='none';
+    const rb=document.querySelector('[onclick="showReqPanel()"]');
+    if(rb) rb.closest('div').style.display='none';
+  } else {
+    const rb=document.querySelector('[onclick="showReqPanel()"]');
+    if(rb) rb.closest('div').style.display='';
+  }
   if(tab==='punch')    { startGPS(); loadTodayLog(); }
   if(tab==='sched')    initSchedTab();
   if(tab==='schedule-view') initScheduleViewTab();
