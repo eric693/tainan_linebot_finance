@@ -42,17 +42,17 @@ handler      = WebhookHandler(LINE_CHANNEL_SECRET)
 # ─── Field Definitions ────────────────────────────────────────────────────────
 
 FIELDS = [
-    {'key': 'breakfast_total',    'label': '早餐點收',        'subtract': False},
-    {'key': 'breakfast_cash',     'label': '早餐餐-現金',      'subtract': False},
-    {'key': 'breakfast_card',     'label': '早餐餐-刷卡合庫',  'subtract': False},
-    {'key': 'breakfast_linepay',  'label': '早餐餐-LINE Pay',  'subtract': False},
-    {'key': 'breakfast_transfer', 'label': '早餐餐-轉帳',      'subtract': False},
-    {'key': 'counter_expense',    'label': '櫃檯支出',         'subtract': True},
-    {'key': 'panda',              'label': '熊貓',             'subtract': False},
+    {'key': 'breakfast_total',    'label': '交班點收',        'subtract': False},
+    {'key': 'breakfast_cash',     'label': '現金',             'subtract': False},
+    {'key': 'breakfast_card',     'label': '刷卡',             'subtract': False},
+    {'key': 'breakfast_linepay',  'label': 'Line pay',         'subtract': False},
+    {'key': 'breakfast_transfer', 'label': '轉帳',             'subtract': False},
+    {'key': 'counter_expense',    'label': '支出',             'subtract': True},
+    {'key': 'panda',              'label': '入金',             'subtract': False},
     {'key': 'ubereats',           'label': 'Uber Eats',        'subtract': False},
     {'key': 'tips',               'label': '小費',             'subtract': False},
     {'key': 'surplus',            'label': '溢收',             'subtract': False},
-    {'key': 'pos_total',          'label': 'POS機總額',        'subtract': False},
+    {'key': 'pos_total',          'label': '當日營業總額',     'subtract': False},
 ]
 
 FIELD_KEYS = [f['key'] for f in FIELDS]
