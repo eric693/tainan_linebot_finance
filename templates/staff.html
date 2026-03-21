@@ -1203,29 +1203,6 @@ function setTabBadge(id, count) {
   }
 }
 
-async function refreshStaffBadges() {
-  if (!me) return;   // not logged in
-  try {
-    // 補打卡申請 — 顯示「已核准」或「已退回」的未讀數
-    // 用最近 7 天有狀態變化的申請來提示
-    const pr = await fetch('/api/punch/request/my').then(r=>r.json()).catch(()=>[]);
-    const punchBadge = Array.isArray(pr)
-      ? pr.filter(r => r.status === 'approved' || r.status === 'rejected').length
-      : 0;
-    setTabBadge('tbadge-punch', punchBadge);
-
-    // 排休申請 — 退回需要重新送出時提示
-    const month = (() => {
-      const n = new Date(); n.setMonth(n.getMonth()+1);
-      return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0');
-    })();
-    const sr = await fetch('/api/schedule/my-request/'+month).then(r=>r.json()).catch(()=>null);
-    const schedBadge = sr && sr.status === 'rejected' ? 1 : 0;
-    setTabBadge('tbadge-sched', schedBadge);
-  } catch(e) {
-    // Silently fail
-  }
-}
 
 // Clear punch badge when user opens punch tab
 // badge clear moved into real switchTab

@@ -1979,9 +1979,9 @@ def api_punch_records():
     if month:
         conds.append("TO_CHAR(pr.punched_at,'YYYY-MM')=%s"); params.append(month)
     elif date_from:
-        conds.append("pr.punched_at::date>=%s"); params.append(date_from)
+        conds.append("(pr.punched_at AT TIME ZONE 'Asia/Taipei')::date>=%s"); params.append(date_from)
         if date_to:
-            conds.append("pr.punched_at::date<=%s"); params.append(date_to)
+            conds.append("(pr.punched_at AT TIME ZONE 'Asia/Taipei')::date<=%s"); params.append(date_to)
 
     where = " AND ".join(conds)
     with get_db() as conn:
@@ -2045,15 +2045,15 @@ def api_punch_summary():
     with get_db() as conn:
         rows = conn.execute("""
             SELECT ps.id as staff_id, ps.name as staff_name,
-                   pr.punched_at::date as work_date,
-                   MIN(CASE WHEN pr.punch_type='in'  THEN pr.punched_at END) as clock_in,
-                   MAX(CASE WHEN pr.punch_type='out' THEN pr.punched_at END) as clock_out,
+                   (pr.punched_at AT TIME ZONE 'Asia/Taipei')::date as work_date,
+                   MIN(CASE WHEN pr.punch_type='in'  THEN pr.punched_at AT TIME ZONE 'Asia/Taipei' END) as clock_in,
+                   MAX(CASE WHEN pr.punch_type='out' THEN pr.punched_at AT TIME ZONE 'Asia/Taipei' END) as clock_out,
                    COUNT(*) as punch_count,
                    BOOL_OR(pr.is_manual) as has_manual
             FROM punch_records pr JOIN punch_staff ps ON ps.id=pr.staff_id
-            WHERE TO_CHAR(pr.punched_at,'YYYY-MM')=%s
-            GROUP BY ps.id, ps.name, pr.punched_at::date
-            ORDER BY pr.punched_at::date DESC, ps.name
+            WHERE TO_CHAR(pr.punched_at AT TIME ZONE 'Asia/Taipei','YYYY-MM')=%s
+            GROUP BY ps.id, ps.name, (pr.punched_at AT TIME ZONE 'Asia/Taipei')::date
+            ORDER BY (pr.punched_at AT TIME ZONE 'Asia/Taipei')::date DESC, ps.name
         """, (month,)).fetchall()
     result = []
     for r in rows:
@@ -3222,6 +3222,30 @@ def api_sal_generate(month):
                     })
             except Exception as _ot_e:
                 print(f"[OT CALC] {staff['name']}: {_ot_e}")
+            # ── Overtime from approved OT requests ───────────────
+            try:
+                approved_ots = conn.execute(
+                    """SELECT ot_hours, ot_pay, day_type,
+                           start_time::text as st, end_time::text as et
+                    FROM overtime_requests
+                    WHERE staff_id=%s
+                      AND to_char(request_date,'YYYY-MM')=%s
+                      AND status='approved' AND ot_pay > 0""",
+                    (staff['id'], month)
+                ).fetchall()
+                for ot in approved_ots:
+                    dt_label = {'weekday':'平日','rest_day':'休息日',
+                                'holiday':'國定假日','special':'例假日'}.get(
+                                ot['day_type'] or 'weekday','')
+                    items_data.append({
+                        'component_id': None,
+                        'component_name': '加班費（申請）',
+                        'comp_type': 'allowance',
+                        'amount': float(ot['ot_pay']),
+                        'note': f"{dt_label} {str(ot['st'])[:5]}~{str(ot['et'])[:5]} {float(ot['ot_hours'])}h"
+                    })
+            except Exception as _ot_e2:
+                print(f"[OT REQ] {staff['name']}: {_ot_e2}")
 
             gross  = sum(i['amount'] for i in items_data if i['comp_type'] == 'allowance')
             deduct = sum(i['amount'] for i in items_data if i['comp_type'] == 'deduction')
