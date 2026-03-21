@@ -355,6 +355,46 @@ def init_db():
                     created_at    TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS shift_types (
+                    id          SERIAL PRIMARY KEY,
+                    name        TEXT NOT NULL,
+                    start_time  TIME NOT NULL,
+                    end_time    TIME NOT NULL,
+                    color       TEXT DEFAULT '#4a7bda',
+                    departments TEXT DEFAULT '',
+                    active      BOOLEAN DEFAULT TRUE,
+                    sort_order  INT DEFAULT 0,
+                    created_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS shift_assignments (
+                    id            SERIAL PRIMARY KEY,
+                    staff_id      INT REFERENCES punch_staff(id) ON DELETE CASCADE,
+                    shift_type_id INT REFERENCES shift_types(id) ON DELETE CASCADE,
+                    shift_date    DATE NOT NULL,
+                    note          TEXT DEFAULT '',
+                    created_at    TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(staff_id, shift_date)
+                )
+            """)
+            # Seed default shifts
+            existing_shifts = conn.execute("SELECT COUNT(*) as cnt FROM shift_types").fetchone()
+            if existing_shifts['cnt'] == 0:
+                defaults = [
+                    ('吧台班',  '08:00', '16:00', '#8b5cf6', '吧台',   1),
+                    ('外場A班', '09:00', '17:00', '#2e9e6b', '外場',   2),
+                    ('外場B班', '14:00', '22:00', '#0ea5e9', '外場',   3),
+                    ('廚房A班', '08:00', '16:00', '#e07b2a', '廚房',   4),
+                    ('廚房B班', '12:00', '20:00', '#d64242', '廚房',   5),
+                    ('廚房C班', '16:00', '00:00', '#6366f1', '廚房',   6),
+                ]
+                for name, st, et, color, dept, sort in defaults:
+                    conn.execute("""
+                        INSERT INTO shift_types (name,start_time,end_time,color,departments,sort_order)
+                        VALUES (%s,%s,%s,%s,%s,%s)
+                    """, (name, st, et, color, dept, sort))
         print("[OK] Database tables created")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -3657,6 +3697,203 @@ def api_punch_my_records():
         })
 
     return jsonify({'month': month, 'records': result})
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Shift Schedule API
+# ═══════════════════════════════════════════════════════════════════
+
+def shift_type_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('start_time'): d['start_time'] = str(d['start_time'])[:5]
+    if d.get('end_time'):   d['end_time']   = str(d['end_time'])[:5]
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    return d
+
+def shift_assign_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('shift_date'): d['shift_date'] = d['shift_date'].isoformat()
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    return d
+
+# ── Shift Types CRUD ───────────────────────────────────────────────
+
+@app.route('/api/shifts/types', methods=['GET'])
+@login_required
+def api_shift_types_list():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM shift_types ORDER BY sort_order, id"
+        ).fetchall()
+    return jsonify([shift_type_row(r) for r in rows])
+
+@app.route('/api/shifts/types/public', methods=['GET'])
+def api_shift_types_public():
+    """Public endpoint for employee page."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM shift_types WHERE active=TRUE ORDER BY sort_order, id"
+        ).fetchall()
+    return jsonify([shift_type_row(r) for r in rows])
+
+@app.route('/api/shifts/types', methods=['POST'])
+@login_required
+def api_shift_type_create():
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            INSERT INTO shift_types (name, start_time, end_time, color, departments, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+        """, (b['name'], b['start_time'], b['end_time'],
+              b.get('color','#4a7bda'), b.get('departments',''),
+              int(b.get('sort_order',0)))).fetchone()
+    return jsonify(shift_type_row(row)), 201
+
+@app.route('/api/shifts/types/<int:sid>', methods=['PUT'])
+@login_required
+def api_shift_type_update(sid):
+    b = request.get_json(force=True)
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE shift_types SET
+              name=%s, start_time=%s, end_time=%s, color=%s,
+              departments=%s, sort_order=%s, active=%s
+            WHERE id=%s RETURNING *
+        """, (b['name'], b['start_time'], b['end_time'],
+              b.get('color','#4a7bda'), b.get('departments',''),
+              int(b.get('sort_order',0)), bool(b.get('active',True)),
+              sid)).fetchone()
+    return jsonify(shift_type_row(row)) if row else ('', 404)
+
+@app.route('/api/shifts/types/<int:sid>', methods=['DELETE'])
+@login_required
+def api_shift_type_delete(sid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM shift_types WHERE id=%s", (sid,))
+    return jsonify({'deleted': sid})
+
+# ── Shift Assignments ──────────────────────────────────────────────
+
+@app.route('/api/shifts/assignments', methods=['GET'])
+@login_required
+def api_shift_assignments_list():
+    month = request.args.get('month','')
+    conds, params = ['TRUE'], []
+    if month:
+        conds.append("to_char(sa.shift_date,'YYYY-MM')=%s")
+        params.append(month)
+    where = ' AND '.join(conds)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT sa.*, ps.name as staff_name, ps.role as staff_role,
+                   st.name as shift_name, st.start_time, st.end_time, st.color,
+                   st.departments
+            FROM shift_assignments sa
+            JOIN punch_staff ps ON ps.id=sa.staff_id
+            JOIN shift_types  st ON st.id=sa.shift_type_id
+            WHERE {where}
+            ORDER BY sa.shift_date, ps.name
+        """, params).fetchall()
+    result = []
+    for r in rows:
+        d = shift_assign_row(r)
+        d['staff_name']  = r['staff_name']
+        d['staff_role']  = r['staff_role']
+        d['shift_name']  = r['shift_name']
+        d['start_time']  = str(r['start_time'])[:5]
+        d['end_time']    = str(r['end_time'])[:5]
+        d['color']       = r['color']
+        d['departments'] = r['departments']
+        result.append(d)
+    return jsonify(result)
+
+@app.route('/api/shifts/assignments', methods=['POST'])
+@login_required
+def api_shift_assignment_create():
+    """Upsert — one shift per staff per day."""
+    b = request.get_json(force=True)
+    staff_ids = b.get('staff_ids', [])
+    shift_type_id = b.get('shift_type_id')
+    dates = b.get('dates', [])
+    note  = b.get('note','').strip()
+
+    if not staff_ids or not shift_type_id or not dates:
+        return jsonify({'error': '請選擇員工、班別及日期'}), 400
+
+    created = 0
+    with get_db() as conn:
+        for sid in staff_ids:
+            for date_str in dates:
+                conn.execute("""
+                    INSERT INTO shift_assignments (staff_id, shift_type_id, shift_date, note)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (staff_id, shift_date) DO UPDATE
+                      SET shift_type_id=%s, note=%s, created_at=NOW()
+                """, (sid, shift_type_id, date_str, note, shift_type_id, note))
+                created += 1
+    return jsonify({'created': created}), 201
+
+@app.route('/api/shifts/assignments/<int:aid>', methods=['DELETE'])
+@login_required
+def api_shift_assignment_delete(aid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM shift_assignments WHERE id=%s", (aid,))
+    return jsonify({'deleted': aid})
+
+@app.route('/api/shifts/assignments/batch-delete', methods=['POST'])
+@login_required
+def api_shift_assignment_batch_delete():
+    b = request.get_json(force=True)
+    staff_ids = b.get('staff_ids', [])
+    dates     = b.get('dates', [])
+    if not staff_ids or not dates:
+        return jsonify({'error': '請選擇員工及日期'}), 400
+    deleted = 0
+    with get_db() as conn:
+        for sid in staff_ids:
+            for date_str in dates:
+                r = conn.execute(
+                    "DELETE FROM shift_assignments WHERE staff_id=%s AND shift_date=%s RETURNING id",
+                    (sid, date_str)
+                ).fetchone()
+                if r: deleted += 1
+    return jsonify({'deleted': deleted})
+
+# ── Employee self-service ─────────────────────────────────────────
+
+@app.route('/api/shifts/my-schedule', methods=['GET'])
+def api_my_shift_schedule():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    month = request.args.get('month','')
+    conds = ["sa.staff_id=%s"]
+    params = [sid]
+    if month:
+        conds.append("to_char(sa.shift_date,'YYYY-MM')=%s")
+        params.append(month)
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT sa.shift_date, sa.note,
+                   st.name as shift_name, st.start_time, st.end_time, st.color
+            FROM shift_assignments sa
+            JOIN shift_types st ON st.id=sa.shift_type_id
+            WHERE sa.staff_id=%s
+              AND to_char(sa.shift_date,'YYYY-MM')=%s
+            ORDER BY sa.shift_date
+        """, (sid, month) if month else (sid,)).fetchall()
+    result = {}
+    for r in rows:
+        ds = r['shift_date'].isoformat()
+        result[ds] = {
+            'shift_name': r['shift_name'],
+            'start_time': str(r['start_time'])[:5],
+            'end_time':   str(r['end_time'])[:5],
+            'color':      r['color'],
+            'note':       r['note'],
+        }
+    return jsonify({'month': month, 'shifts': result})
 
 @app.route('/')
 def index():

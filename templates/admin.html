@@ -28,6 +28,8 @@ body { font-family: 'Noto Sans TC', sans-serif; background: var(--bg); color: va
 .sidebar-nav { flex: 1; padding: 20px 0; }
 .nav-label { font-size: 10px; color: rgba(255,255,255,0.3); letter-spacing: 0.12em; text-transform: uppercase; padding: 0 24px; margin-bottom: 8px; }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 24px; font-size: 13px; color: rgba(255,255,255,0.6); cursor: pointer; transition: all 0.15s; border-left: 3px solid transparent; text-decoration: none; }
+.nav-badge { display: inline-flex; align-items: center; justify-content: center; background: #e53e3e; color: #fff; font-size: 10px; font-weight: 800; font-family: 'DM Mono', monospace; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px; margin-left: auto; animation: badge-pop .2s ease; }
+@keyframes badge-pop { from { transform: scale(0); } to { transform: scale(1); } }
 .nav-item:hover, .nav-item.active { color: #fff; background: rgba(255,255,255,0.06); border-left-color: var(--gold); }
 .sidebar-bottom { padding: 16px 24px; border-top: 1px solid rgba(255,255,255,0.07); }
 .logout-btn { font-size: 12px; color: rgba(255,255,255,0.4); cursor: pointer; text-decoration: none; letter-spacing: 0.05em; transition: color 0.15s; }
@@ -245,8 +247,8 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <a href="#" class="nav-item"        id="nav-summary" onclick="showPage('summary',event)">欄位統計</a>
     <a href="#" class="nav-item"        id="nav-ocr"     onclick="showPage('ocr',event)">AI 報帳辨識</a>
     <a href="#" class="nav-item"        id="nav-inv"     onclick="showPage('inv',event)">庫存管理</a>
-    <a href="#" class="nav-item"        id="nav-punch"   onclick="showPage('punch',event)">打卡管理</a>
-    <a href="#" class="nav-item"        id="nav-sched"   onclick="showPage('sched',event)">排班管理</a>
+    <a href="#" class="nav-item"        id="nav-punch"   onclick="showPage('punch',event)">打卡管理<span class="nav-badge" id="badge-punch" style="display:none"></span></a>
+    <a href="#" class="nav-item"        id="nav-sched"   onclick="showPage('sched',event)">排班管理<span class="nav-badge" id="badge-sched" style="display:none"></span></a>
     <a href="#" class="nav-item"        id="nav-salary"  onclick="showPage('salary',event)">薪資管理</a>
   </nav>
   <div class="sidebar-bottom">
@@ -1195,6 +1197,47 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
   </div><!-- end page-salary -->
 
+
+  <!-- ── 班別排班 ──────────────────────────── -->
+  <div class="page" id="page-shift" style="display:none">
+
+    <div class="inv-tab-bar">
+      <button class="inv-tab active" id="shifttab-schedule" onclick="switchShiftTab('schedule')">排班指派</button>
+      <button class="inv-tab"        id="shifttab-types"    onclick="switchShiftTab('types')">班別設定</button>
+    </div>
+
+    <!-- ── 排班指派 ── -->
+    <div id="shift-panel-schedule">
+      <div class="filter-bar" style="margin-bottom:16px;gap:12px;flex-wrap:wrap">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="shift-month" onchange="loadShiftCalendar()">
+        <span style="flex:1"></span>
+        <button class="btn btn-primary btn-sm" onclick="openShiftAssignModal()">指派班別</button>
+        <button class="btn btn-outline btn-sm" onclick="loadShiftCalendar()">重新整理</button>
+      </div>
+
+      <!-- Month calendar grid -->
+      <div id="shift-cal-wrap"></div>
+    </div>
+
+    <!-- ── 班別設定 ── -->
+    <div id="shift-panel-types" style="display:none">
+      <div class="section-head">
+        <span style="font-size:12px;color:var(--muted)">設定工作班別與時間，可指定適用部門</span>
+        <button class="btn btn-primary" onclick="openShiftTypeModal()">新增班別</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>班別名稱</th><th>上班時間</th><th>下班時間</th><th>適用部門</th><th>顏色</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="shift-types-tbody"><tr><td colspan="7" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end page-shift -->
+
 </main>
 
 
@@ -1316,6 +1359,90 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       <button class="btn btn-outline" onclick="printCurrentSlip()">列印</button>
       <button class="btn btn-outline" onclick="downloadSlipPDF()">下載 PDF</button>
       <button class="btn btn-primary" onclick="saveSalRecord()">儲存</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- Shift Type Modal -->
+<div class="modal-overlay" id="shift-type-modal" style="display:none">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-header">
+      <span class="modal-title" id="stm-title">新增班別</span>
+      <button class="modal-close" onclick="closeShiftTypeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="stm-id">
+      <div class="form-row">
+        <div><label class="form-label">班別名稱 *</label><input class="form-input" id="stm-name" placeholder="例：外場A班"></div>
+        <div>
+          <label class="form-label">顏色</label>
+          <input type="color" id="stm-color" value="#4a7bda" style="width:100%;height:38px;border:1.5px solid var(--border);border-radius:8px;cursor:pointer">
+        </div>
+      </div>
+      <div class="form-row">
+        <div><label class="form-label">上班時間</label><input class="form-input" type="time" id="stm-start" value="09:00"></div>
+        <div><label class="form-label">下班時間</label><input class="form-input" type="time" id="stm-end" value="17:00"></div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label class="form-label">適用部門（選填）</label>
+          <input class="form-input" id="stm-dept" placeholder="例：外場、廚房（可多個）">
+        </div>
+        <div>
+          <label class="form-label">排序</label>
+          <input class="form-input" type="number" id="stm-sort" value="0" min="0">
+        </div>
+      </div>
+      <div>
+        <label class="form-label">狀態</label>
+        <select class="form-input" id="stm-active" style="width:auto">
+          <option value="1">啟用</option>
+          <option value="0">停用</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeShiftTypeModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveShiftType()">儲存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shift Assign Modal -->
+<div class="modal-overlay" id="shift-assign-modal" style="display:none">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <span class="modal-title">指派班別</span>
+      <button class="modal-close" onclick="closeShiftAssignModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:14px">
+        <label class="form-label">選擇員工（可多選）</label>
+        <div id="sam-staff-list" style="display:flex;flex-wrap:wrap;gap:6px;padding:10px;border:1.5px solid var(--border);border-radius:8px;min-height:44px"></div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label class="form-label">班別</label>
+          <select class="form-input" id="sam-shift-type" style="width:100%"></select>
+        </div>
+        <div>
+          <label class="form-label">備註</label>
+          <input class="form-input" id="sam-note" placeholder="選填">
+        </div>
+      </div>
+      <div style="margin-bottom:4px">
+        <label class="form-label">選擇日期（可多選）</label>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">點擊月曆格子選取日期</div>
+        <input type="month" class="filter-input" id="sam-month" onchange="renderSamCalendar()" style="margin-bottom:10px">
+        <div id="sam-calendar"></div>
+        <div id="sam-selected-dates" style="font-size:12px;color:var(--muted);margin-top:8px;min-height:16px"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeShiftAssignModal()">取消</button>
+      <button class="btn btn-danger" onclick="deleteShiftAssign()" id="sam-delete-btn" style="display:none">刪除選取</button>
+      <button class="btn btn-primary" onclick="saveShiftAssign()">儲存指派</button>
     </div>
   </div>
 </div>
@@ -1719,11 +1846,11 @@ function showPage(page, e) {
   closeSidebar();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
-  ['records','charts','summary','ocr','inv','punch','sched','salary'].forEach(p =>
+  ['records','charts','summary','ocr','inv','punch','sched','shift','salary'].forEach(p =>
     document.getElementById('page-' + p).style.display = p === page ? '' : 'none'
   );
   document.getElementById('page-title').textContent =
-    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理', sched: '排班管理', salary: '薪資管理' }[page];
+    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理', sched: '排班管理', shift: '班別排班', salary: '薪資管理' }[page];
   document.getElementById('new-btn').style.display = page === 'records' ? '' : 'none';
   if (page === 'records') loadRecords();
   if (page === 'charts')  { initChartDefaults(); renderCharts(); }
@@ -1732,6 +1859,7 @@ function showPage(page, e) {
   if (page === 'inv')     initInv();
   if (page === 'punch')   initPunch();
   if (page === 'sched')   initSched();
+  if (page === 'shift')   initShift();
   if (page === 'salary')  initSalary();
 }
 
@@ -4783,6 +4911,370 @@ async function deletePunchReq(id) {
   punchReqList = punchReqList.filter(r=>r.id!==id);
   renderPunchRequests();
   document.getElementById('preq-count').textContent = `共 ${punchReqList.length} 筆`;
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// Notification badges — poll pending requests every 60 seconds
+// ═══════════════════════════════════════════════════════════════
+async function refreshBadges() {
+  try {
+    // Punch requests (補打卡申請)
+    const pr = await fetch('/api/punch/requests?status=pending').then(r=>r.json()).catch(()=>[]);
+    const punchCount = Array.isArray(pr) ? pr.length : 0;
+    setBadge('badge-punch', punchCount);
+
+    // Schedule requests (排休申請) — pending + modified_pending
+    const [sr1, sr2] = await Promise.all([
+      fetch('/api/schedule/admin/requests?status=pending').then(r=>r.json()).catch(()=>[]),
+      fetch('/api/schedule/admin/requests?status=modified_pending').then(r=>r.json()).catch(()=>[]),
+    ]);
+    const schedCount = (Array.isArray(sr1)?sr1.length:0) + (Array.isArray(sr2)?sr2.length:0);
+    setBadge('badge-sched', schedCount);
+  } catch(e) {
+    // Silently fail — badges are informational only
+  }
+}
+
+function setBadge(id, count) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (count > 0) {
+    el.textContent = count > 99 ? '99+' : count;
+    el.style.display = 'inline-flex';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+// Run on load and every 60 seconds
+document.addEventListener('DOMContentLoaded', () => {
+  refreshBadges();
+  setInterval(refreshBadges, 60000);
+});
+
+// Also refresh when switching away from punch/sched pages (after review)
+const _origShowPage = showPage;
+function showPage(page, e) {
+  _origShowPage(page, e);
+  // Small delay to let any review action complete
+  setTimeout(refreshBadges, 800);
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 班別排班模組
+// ═══════════════════════════════════════════════════════════════
+let shiftTypes     = [];
+let shiftAssigns   = [];
+let shiftEditTypeId = null;
+let samSelectedDates = new Set();
+let samSelectedStaff = new Set();
+
+function initShift() {
+  const n  = new Date();
+  const ym = `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;
+  if (!document.getElementById('shift-month').value)
+    document.getElementById('shift-month').value = ym;
+  switchShiftTab('schedule');
+}
+
+function switchShiftTab(tab) {
+  ['schedule','types'].forEach(t => {
+    document.getElementById('shifttab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('shift-panel-' + t).style.display = t === tab ? '' : 'none';
+  });
+  if (tab === 'schedule') loadShiftCalendar();
+  if (tab === 'types')    loadShiftTypes();
+}
+
+// ── 月曆排班視圖 ───────────────────────────────────────────────
+async function loadShiftCalendar() {
+  const month = document.getElementById('shift-month').value;
+  if (!month) return;
+  const [typesRes, assignsRes, staffRes] = await Promise.all([
+    fetch('/api/shifts/types').then(r=>r.json()),
+    fetch(`/api/shifts/assignments?month=${month}`).then(r=>r.json()),
+    fetch('/api/punch/staff').then(r=>r.json()),
+  ]);
+  shiftTypes  = typesRes.filter(t => t.active);
+  shiftAssigns = assignsRes;
+  punchStaffList = staffRes;
+  renderShiftCalendar(month, staffRes, assignsRes);
+}
+
+function renderShiftCalendar(month, staffList, assigns) {
+  const wrap = document.getElementById('shift-cal-wrap');
+  const [y, m] = month.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const DAYS_SHORT = ['日','一','二','三','四','五','六'];
+
+  // Build assign lookup: date → {staff_id: assign}
+  const lookup = {};
+  assigns.forEach(a => {
+    if (!lookup[a.shift_date]) lookup[a.shift_date] = {};
+    lookup[a.shift_date][a.staff_id] = a;
+  });
+
+  // Days header
+  const days = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds  = `${month}-${String(d).padStart(2,'0')}`;
+    const dt  = new Date(y, m-1, d);
+    const wd  = dt.getDay();
+    days.push({ d, ds, wd });
+  }
+
+  let html = `<div style="overflow-x:auto">
+  <table style="border-collapse:collapse;min-width:max-content;font-size:12px">
+    <thead>
+      <tr>
+        <th style="position:sticky;left:0;background:var(--navy);color:#fff;padding:8px 14px;min-width:90px;z-index:2">員工</th>
+        ${days.map(({d,wd,ds}) => {
+          const dt = new Date(y,m-1,d);
+          const past = dt < today;
+          const wc = wd===0?'var(--red)':wd===6?'var(--accent)':'#fff';
+          return `<th style="padding:6px 4px;text-align:center;min-width:68px;background:var(--navy);color:${wc};font-weight:${wd===0||wd===6?'700':'400'};opacity:${past?.6:1}">
+            <div>${d}</div><div style="font-size:10px">${DAYS_SHORT[wd]}</div>
+          </th>`;
+        }).join('')}
+      </tr>
+    </thead>
+    <tbody>`;
+
+  staffList.filter(s => s.active).forEach(staff => {
+    html += `<tr>
+      <td style="position:sticky;left:0;background:#fff;padding:6px 12px;font-weight:600;border-bottom:1px solid var(--border);z-index:1;white-space:nowrap">
+        ${escHtml(staff.name)}
+        ${staff.role ? `<div style="font-size:10px;color:var(--muted)">${escHtml(staff.role)}</div>` : ''}
+      </td>`;
+    days.forEach(({ds}) => {
+      const a = lookup[ds] && lookup[ds][staff.id];
+      if (a) {
+        html += `<td style="padding:3px;border-bottom:1px solid var(--border);border-right:1px solid #f0f2f8;text-align:center">
+          <div style="background:${a.color||'#4a7bda'};color:#fff;border-radius:5px;padding:3px 5px;font-size:11px;cursor:pointer;line-height:1.3"
+               onclick="openShiftAssignModal('${ds}',${staff.id})" title="點擊修改">
+            <div style="font-weight:700">${escHtml(a.shift_name)}</div>
+            <div style="opacity:.9">${a.start_time}~${a.end_time}</div>
+          </div>
+        </td>`;
+      } else {
+        html += `<td style="padding:3px;border-bottom:1px solid var(--border);border-right:1px solid #f0f2f8;text-align:center">
+          <div style="width:60px;height:38px;border:1.5px dashed var(--border);border-radius:5px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--border);font-size:16px"
+               onclick="openShiftAssignModal('${ds}',${staff.id})" title="點擊指派">+</div>
+        </td>`;
+      }
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  wrap.innerHTML = html;
+}
+
+// ── Assign Modal ───────────────────────────────────────────────
+async function openShiftAssignModal(prefillDate=null, prefillStaffId=null) {
+  samSelectedDates = new Set();
+  samSelectedStaff = new Set();
+  if (prefillDate)    samSelectedDates.add(prefillDate);
+  if (prefillStaffId) samSelectedStaff.add(prefillStaffId);
+
+  // Load latest data
+  if (!shiftTypes.length) shiftTypes = await fetch('/api/shifts/types').then(r=>r.json()).then(d=>d.filter(t=>t.active));
+  if (!punchStaffList.length) punchStaffList = await fetch('/api/punch/staff').then(r=>r.json());
+
+  // Staff checkboxes
+  const sl = document.getElementById('sam-staff-list');
+  sl.innerHTML = punchStaffList.filter(s=>s.active).map(s => `
+    <label style="display:flex;align-items:center;gap:5px;padding:4px 8px;border:1.5px solid ${samSelectedStaff.has(s.id)?'var(--navy)':'var(--border)'};
+      border-radius:6px;cursor:pointer;font-size:12px;background:${samSelectedStaff.has(s.id)?'var(--navy)':'#fff'};
+      color:${samSelectedStaff.has(s.id)?'#fff':'var(--text)'}">
+      <input type="checkbox" data-sid="${s.id}" ${samSelectedStaff.has(s.id)?'checked':''} style="display:none"
+             onchange="toggleSamStaff(${s.id},this)">
+      ${escHtml(s.name)}
+    </label>`).join('');
+
+  // Shift type select
+  const sel = document.getElementById('sam-shift-type');
+  sel.innerHTML = shiftTypes.map(t =>
+    `<option value="${t.id}" data-color="${t.color}">${escHtml(t.name)} (${t.start_time}~${t.end_time})</option>`
+  ).join('');
+
+  // Month picker
+  const m = prefillDate ? prefillDate.slice(0,7) : document.getElementById('shift-month').value;
+  document.getElementById('sam-month').value = m;
+
+  document.getElementById('sam-note').value = '';
+  document.getElementById('sam-delete-btn').style.display = prefillDate && prefillStaffId ? '' : 'none';
+  renderSamCalendar();
+  document.getElementById('shift-assign-modal').style.display = 'flex';
+}
+
+function toggleSamStaff(sid, cb) {
+  if (cb.checked) samSelectedStaff.add(sid); else samSelectedStaff.delete(sid);
+  // Update label style
+  const label = cb.closest('label');
+  label.style.borderColor = cb.checked ? 'var(--navy)' : 'var(--border)';
+  label.style.background  = cb.checked ? 'var(--navy)' : '#fff';
+  label.style.color       = cb.checked ? '#fff'        : 'var(--text)';
+}
+
+function renderSamCalendar() {
+  const month = document.getElementById('sam-month').value;
+  if (!month) return;
+  const [y, m] = month.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const firstWd = new Date(y, m-1, 1).getDay();
+  const DAYS_S  = ['日','一','二','三','四','五','六'];
+
+  let html = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:3px">
+    ${DAYS_S.map((d,i)=>`<div style="text-align:center;font-size:10px;font-weight:700;padding:4px 0;color:${i===0?'var(--red)':i===6?'var(--accent)':'var(--muted)'}">${d}</div>`).join('')}
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">`;
+
+  for (let i=0; i<firstWd; i++) html += '<div></div>';
+  for (let day=1; day<=daysInMonth; day++) {
+    const ds = `${month}-${String(day).padStart(2,'0')}`;
+    const dt = new Date(y, m-1, day);
+    const wd = dt.getDay();
+    const sel = samSelectedDates.has(ds);
+    const wc  = wd===0?'var(--red)':wd===6?'var(--accent)':'var(--text)';
+    html += `<div onclick="toggleSamDate('${ds}')"
+      style="aspect-ratio:1;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;
+        border:1.5px solid ${sel?'var(--navy)':'var(--border)'};
+        background:${sel?'var(--navy)':'#fff'};
+        font-family:'DM Mono',monospace;font-size:13px;font-weight:600;
+        color:${sel?'#fff':wc}">
+      ${day}
+    </div>`;
+  }
+  html += '</div>';
+  document.getElementById('sam-calendar').innerHTML = html;
+
+  const sorted = [...samSelectedDates].sort();
+  document.getElementById('sam-selected-dates').textContent =
+    sorted.length ? `已選 ${sorted.length} 天：${sorted.map(d=>d.slice(5)).join('、')}` : '尚未選取日期';
+}
+
+function toggleSamDate(ds) {
+  if (samSelectedDates.has(ds)) samSelectedDates.delete(ds);
+  else samSelectedDates.add(ds);
+  renderSamCalendar();
+}
+
+function closeShiftAssignModal() { document.getElementById('shift-assign-modal').style.display = 'none'; }
+
+async function saveShiftAssign() {
+  const staffIds    = [...samSelectedStaff];
+  const shiftTypeId = parseInt(document.getElementById('sam-shift-type').value);
+  const dates       = [...samSelectedDates].sort();
+  const note        = document.getElementById('sam-note').value.trim();
+  if (!staffIds.length) { showToast('請選擇至少一位員工', 'error'); return; }
+  if (!dates.length)    { showToast('請選擇至少一個日期', 'error'); return; }
+  const res  = await fetch('/api/shifts/assignments', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ staff_ids: staffIds, shift_type_id: shiftTypeId, dates, note })
+  });
+  const data = await res.json();
+  if (data.error) { showToast(data.error, 'error'); return; }
+  closeShiftAssignModal();
+  showToast(`已指派 ${data.created} 筆排班`, 'success');
+  await loadShiftCalendar();
+}
+
+async function deleteShiftAssign() {
+  const staffIds = [...samSelectedStaff];
+  const dates    = [...samSelectedDates].sort();
+  if (!staffIds.length || !dates.length) { showToast('請先選擇員工和日期', 'error'); return; }
+  if (!confirm(`確定刪除 ${staffIds.length} 位員工共 ${dates.length} 天的排班？`)) return;
+  const res  = await fetch('/api/shifts/assignments/batch-delete', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ staff_ids: staffIds, dates })
+  });
+  const data = await res.json();
+  closeShiftAssignModal();
+  showToast(`已刪除 ${data.deleted} 筆排班`, 'success');
+  await loadShiftCalendar();
+}
+
+// ── Shift Types ────────────────────────────────────────────────
+async function loadShiftTypes() {
+  const res  = await fetch('/api/shifts/types');
+  shiftTypes = await res.json();
+  const tb   = document.getElementById('shift-types-tbody');
+  if (!shiftTypes.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="empty-state-text">尚無班別</div></td></tr>';
+    return;
+  }
+  tb.innerHTML = shiftTypes.map(t => `<tr style="opacity:${t.active?1:.5}">
+    <td style="font-weight:600">
+      <span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${t.color};margin-right:6px;vertical-align:middle"></span>
+      ${escHtml(t.name)}
+    </td>
+    <td style="font-family:'DM Mono',monospace;font-weight:600;color:var(--green)">${t.start_time}</td>
+    <td style="font-family:'DM Mono',monospace;font-weight:600;color:var(--red)">${t.end_time}</td>
+    <td style="color:var(--muted)">${escHtml(t.departments||'—')}</td>
+    <td><div style="width:24px;height:24px;border-radius:4px;background:${t.color};border:1px solid var(--border)"></div></td>
+    <td>${t.active ? '<span class="badge badge-ok">啟用</span>' : '<span class="badge badge-warn">停用</span>'}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-outline btn-sm" onclick="openShiftTypeModal(${t.id})">編輯</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteShiftType(${t.id})" style="margin-left:4px">刪除</button>
+    </td>
+  </tr>`).join('');
+}
+
+function openShiftTypeModal(id=null) {
+  shiftEditTypeId = id;
+  document.getElementById('stm-title').textContent = id ? '編輯班別' : '新增班別';
+  if (id) {
+    const t = shiftTypes.find(x=>x.id===id); if(!t) return;
+    document.getElementById('stm-id').value    = t.id;
+    document.getElementById('stm-name').value  = t.name;
+    document.getElementById('stm-start').value = t.start_time;
+    document.getElementById('stm-end').value   = t.end_time;
+    document.getElementById('stm-color').value = t.color;
+    document.getElementById('stm-dept').value  = t.departments||'';
+    document.getElementById('stm-sort').value  = t.sort_order||0;
+    document.getElementById('stm-active').value= t.active?'1':'0';
+  } else {
+    ['stm-id','stm-name','stm-dept'].forEach(i=>document.getElementById(i).value='');
+    document.getElementById('stm-start').value  = '09:00';
+    document.getElementById('stm-end').value    = '17:00';
+    document.getElementById('stm-color').value  = '#4a7bda';
+    document.getElementById('stm-sort').value   = '0';
+    document.getElementById('stm-active').value = '1';
+  }
+  document.getElementById('shift-type-modal').style.display = 'flex';
+}
+function closeShiftTypeModal() { document.getElementById('shift-type-modal').style.display = 'none'; }
+
+async function saveShiftType() {
+  const id = document.getElementById('stm-id').value;
+  const body = {
+    name:        document.getElementById('stm-name').value.trim(),
+    start_time:  document.getElementById('stm-start').value,
+    end_time:    document.getElementById('stm-end').value,
+    color:       document.getElementById('stm-color').value,
+    departments: document.getElementById('stm-dept').value.trim(),
+    sort_order:  parseInt(document.getElementById('stm-sort').value)||0,
+    active:      document.getElementById('stm-active').value==='1',
+  };
+  if (!body.name) { showToast('請填寫班別名稱','error'); return; }
+  const url  = id ? `/api/shifts/types/${id}` : '/api/shifts/types';
+  const meth = id ? 'PUT' : 'POST';
+  const res  = await fetch(url, {method:meth, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (!res.ok) { showToast('儲存失敗','error'); return; }
+  closeShiftTypeModal();
+  showToast(id?'已更新':'已新增','success');
+  await loadShiftTypes();
+}
+
+async function deleteShiftType(id) {
+  if (!confirm('確定刪除此班別？相關排班指派也會一併刪除。')) return;
+  await fetch(`/api/shifts/types/${id}`, {method:'DELETE'});
+  showToast('已刪除','success');
+  await loadShiftTypes();
 }
 
 </script>
