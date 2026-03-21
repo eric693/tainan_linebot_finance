@@ -2272,8 +2272,20 @@ def api_sched_admin_review(rid):
     action      = b.get('action')       # 'approve' | 'reject'
     reviewed_by = b.get('reviewed_by','').strip()
     review_note = b.get('review_note','').strip()
-    if action not in ('approve','reject'):
-        return jsonify({'error': 'action must be approve or reject'}), 400
+    if action not in ('approve','reject','revoke'):
+        return jsonify({'error': 'action must be approve / reject / revoke'}), 400
+
+    if action == 'revoke':
+        # Revoke approved request → back to pending, employee can resubmit
+        with get_db() as conn:
+            row = conn.execute("""
+                UPDATE schedule_requests
+                SET status='pending', reviewed_by='', review_note=%s,
+                    reviewed_at=NULL, updated_at=NOW()
+                WHERE id=%s RETURNING *
+            """, (review_note or '主管已撤銷核准', rid)).fetchone()
+        return jsonify(sched_req_row(row)) if row else ('', 404)
+
     new_status = 'approved' if action == 'approve' else 'rejected'
     with get_db() as conn:
         row = conn.execute("""
