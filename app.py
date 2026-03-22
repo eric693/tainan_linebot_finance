@@ -3406,33 +3406,38 @@ def _call_line_api(cfg, method, path, body=None):
         return 0, {'error': str(e)}
 
 
-def _build_richmenu_body(gps_required):
-    """Build the Rich Menu JSON for punch buttons."""
-    # 2x2 grid: 上班 / 下班 / 休息開始 / 休息結束  +  狀態 / 傳位置打卡
-    if gps_required:
-        # GPS required: top row = punch commands → bot will ask for location
-        # Bottom row: status + share location guide
-        areas = [
-            {"bounds": {"x": 0,    "y": 0,   "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "上班"}},
-            {"bounds": {"x": 1250, "y": 0,   "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "下班"}},
-            {"bounds": {"x": 0,    "y": 420, "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "休息"}},
-            {"bounds": {"x": 1250, "y": 420, "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "回來"}},
-        ]
-    else:
-        areas = [
-            {"bounds": {"x": 0,    "y": 0,   "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "上班"}},
-            {"bounds": {"x": 1250, "y": 0,   "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "下班"}},
-            {"bounds": {"x": 0,    "y": 420, "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "休息"}},
-            {"bounds": {"x": 1250, "y": 420, "width": 1250, "height": 420},
-             "action": {"type": "message", "text": "回來"}},
-        ]
+def _build_richmenu_body(gps_required, staff_url=''):
+    """Build the Rich Menu JSON for punch buttons.
+    Layout with custom image:
+      Top-Left:     上班打卡 (Clock In)
+      Top-Right:    下班打卡 (Clock Out)
+      Center:       員工系統連結 (opens staff URL)
+      Bottom-Left:  休息開始 (Break Out)
+      Bottom-Right: 休息結束 (Break In)
+    """
+    # Center area: 700x400 pixels centered in 2500x843
+    cx, cy = 900, 221
+    cw, ch = 700, 400
+
+    # Four corner areas avoid the center
+    areas = [
+        # Top-Left: Clock In
+        {"bounds": {"x": 0,    "y": 0,   "width": 900,  "height": 421},
+         "action": {"type": "message", "text": "上班"}},
+        # Top-Right: Clock Out
+        {"bounds": {"x": 1600, "y": 0,   "width": 900,  "height": 421},
+         "action": {"type": "message", "text": "下班"}},
+        # Bottom-Left: Break Out
+        {"bounds": {"x": 0,    "y": 422, "width": 900,  "height": 421},
+         "action": {"type": "message", "text": "休息"}},
+        # Bottom-Right: Break In
+        {"bounds": {"x": 1600, "y": 422, "width": 900,  "height": 421},
+         "action": {"type": "message", "text": "回來"}},
+        # Center: Staff system link
+        {"bounds": {"x": cx, "y": cy, "width": cw, "height": ch},
+         "action": {"type": "uri", "uri": staff_url or "https://example.com/staff"}},
+    ]
+
     return {
         "size":       {"width": 2500, "height": 843},
         "selected":   True,
@@ -3569,19 +3574,27 @@ def _make_richmenu_png():
     return buf.getvalue()
 
 
+CUSTOM_RICHMENU_IMAGE_PATH = '/tmp/custom_richmenu.png'
+
 def _create_richmenu_image(rich_menu_id, cfg, gps_required):
-    """Generate a 2500x843 PNG with Chinese text labels and upload to LINE."""
-    import io
+    """Upload rich menu image — uses custom image if uploaded, else auto-generates."""
+    import io, os
 
     token = cfg.get('channel_access_token', '')
 
-    try:
-        png_bytes = _make_richmenu_png()
-        print(f"[RICHMENU] Generated PNG: {len(png_bytes)} bytes")
+    # Use custom uploaded image if available
+    if os.path.exists(CUSTOM_RICHMENU_IMAGE_PATH):
+        with open(CUSTOM_RICHMENU_IMAGE_PATH, 'rb') as f:
+            png_bytes = f.read()
+        print(f"[RICHMENU] Using custom image: {len(png_bytes)} bytes")
+    else:
+        try:
+            png_bytes = _make_richmenu_png()
+            print(f"[RICHMENU] Generated PNG: {len(png_bytes)} bytes")
 
-    except Exception as e:
-        # Fallback: plain colored blocks (no text) using struct/zlib
-        print(f"[RICHMENU] Pillow failed ({e}), using plain PNG fallback")
+        except Exception as e:
+            # Fallback: plain colored blocks (no text) using struct/zlib
+            print(f"[RICHMENU] Pillow failed ({e}), using plain PNG fallback")
         import struct, zlib
 
         def _png_chunk(name, data):
@@ -3635,8 +3648,15 @@ def api_richmenu_create():
     except Exception:
         pass
 
+    # Get staff system URL
+    staff_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+    if staff_url:
+        staff_url = staff_url.rstrip('/') + '/staff'
+    else:
+        staff_url = request.host_url.rstrip('/') + '/staff'
+
     # 1. Create rich menu
-    body   = _build_richmenu_body(gps_required)
+    body   = _build_richmenu_body(gps_required, staff_url)
     status, data = _call_line_api(cfg, 'POST', '/richmenu', body)
     if status != 200:
         return jsonify({'error': f'建立失敗 ({status}): {data.get("error","")}'}), 500
@@ -3666,6 +3686,65 @@ def api_richmenu_create():
     })
 
 
+
+
+@app.route('/api/line-punch/richmenu/upload-image', methods=['POST'])
+@login_required
+def api_richmenu_upload_image():
+    """Upload a custom rich menu image (PNG/JPG, max 1MB)."""
+    import os
+    from PIL import Image as _PIL_Image
+    import io as _io
+
+    if 'image' not in request.files:
+        return jsonify({'error': '請選擇圖片檔案'}), 400
+
+    f = request.files['image']
+    if not f.filename:
+        return jsonify({'error': '請選擇圖片檔案'}), 400
+
+    data = f.read()
+    if len(data) > 3 * 1024 * 1024:
+        return jsonify({'error': '圖片不可超過 3MB'}), 400
+
+    try:
+        img = _PIL_Image.open(_io.BytesIO(data))
+        # Convert and resize to exact 2500x843
+        img = img.convert('RGB')
+        if img.size != (2500, 843):
+            img = img.resize((2500, 843), _PIL_Image.LANCZOS)
+            print(f"[RICHMENU] Resized from {img.size} to 2500x843")
+        buf = _io.BytesIO()
+        img.save(buf, 'PNG', optimize=True)
+        png_bytes = buf.getvalue()
+    except Exception as e:
+        return jsonify({'error': f'圖片處理失敗：{str(e)}'}), 400
+
+    with open(CUSTOM_RICHMENU_IMAGE_PATH, 'wb') as out:
+        out.write(png_bytes)
+
+    return jsonify({
+        'ok': True,
+        'size': len(png_bytes),
+        'message': f'自訂圖片已儲存（{len(png_bytes)//1024} KB），下次建立圖文選單時將使用此圖片'
+    })
+
+@app.route('/api/line-punch/richmenu/delete-custom-image', methods=['POST'])
+@login_required
+def api_richmenu_delete_custom():
+    """Remove custom image, revert to auto-generated."""
+    import os
+    if os.path.exists(CUSTOM_RICHMENU_IMAGE_PATH):
+        os.remove(CUSTOM_RICHMENU_IMAGE_PATH)
+    return jsonify({'ok': True, 'message': '已刪除自訂圖片，將使用自動產生的圖片'})
+
+@app.route('/api/line-punch/richmenu/has-custom-image', methods=['GET'])
+@login_required
+def api_richmenu_has_custom():
+    import os
+    exists = os.path.exists(CUSTOM_RICHMENU_IMAGE_PATH)
+    size   = os.path.getsize(CUSTOM_RICHMENU_IMAGE_PATH) if exists else 0
+    return jsonify({'has_custom': exists, 'size_kb': size // 1024})
 
 @app.route('/api/line-punch/richmenu/preview-image')
 @login_required

@@ -1002,7 +1002,13 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
               <button class="btn btn-primary btn-sm" onclick="createRichMenu()">建立圖文選單</button>
               <button class="btn btn-outline btn-sm" onclick="loadRichMenus()">查看現有選單</button>
               <a class="btn btn-outline btn-sm" href="/api/line-punch/richmenu/preview-image" target="_blank">預覽圖片</a>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('rm-img-upload').click()">上傳自訂圖片</button>
+              <input type="file" id="rm-img-upload" accept="image/png,image/jpeg" style="display:none" onchange="uploadCustomRMImage(this)">
+              <button class="btn btn-outline btn-sm" id="rm-del-custom-btn" style="display:none;color:var(--red);border-color:var(--red)" onclick="deleteCustomRMImage()">移除自訂圖片</button>
               <button class="btn btn-ghost btn-sm" onclick="unsetRichMenu()">取消預設選單</button>
+            </div>
+            <div id="rm-custom-status" style="display:none;font-size:12px;margin-bottom:8px;padding:8px 12px;background:var(--green-light);border-radius:8px;border:1px solid #a8dfc5;color:var(--green)">
+              <strong>已上傳自訂圖片</strong> — 建立選單時將使用此圖片
             </div>
             <div id="rm-msg" style="font-size:12px;min-height:16px;margin-bottom:10px"></div>
             <div id="rm-list" style="display:none">
@@ -5562,6 +5568,58 @@ async function deleteOTReq(id) {
 }
 
 // salary type + hourly_rate merged into original functions below
+
+
+// ── Custom Rich Menu Image Upload ──────────────────────────────
+async function checkCustomRMImage() {
+  try {
+    const res = await fetch('/api/line-punch/richmenu/has-custom-image');
+    const d   = await res.json();
+    const statusEl  = document.getElementById('rm-custom-status');
+    const deleteBtn = document.getElementById('rm-del-custom-btn');
+    if (d.has_custom) {
+      if (statusEl)  statusEl.style.display  = '';
+      if (deleteBtn) deleteBtn.style.display  = '';
+      if (statusEl)  statusEl.innerHTML = `<strong>已上傳自訂圖片</strong>（${d.size_kb} KB）— 建立選單時將使用此圖片`;
+    } else {
+      if (statusEl)  statusEl.style.display  = 'none';
+      if (deleteBtn) deleteBtn.style.display  = 'none';
+    }
+  } catch(e) {}
+}
+
+async function uploadCustomRMImage(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const msgEl = document.getElementById('rm-msg');
+  msgEl.textContent = '上傳中...';
+  const fd = new FormData();
+  fd.append('image', file);
+  try {
+    const res  = await fetch('/api/line-punch/richmenu/upload-image', { method:'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      msgEl.style.color = 'var(--red)';
+      msgEl.textContent = data.error || '上傳失敗';
+    } else {
+      msgEl.style.color = 'var(--green)';
+      msgEl.textContent = data.message;
+      await checkCustomRMImage();
+    }
+  } catch(e) {
+    msgEl.style.color = 'var(--red)';
+    msgEl.textContent = '上傳失敗，請重試';
+  }
+  input.value = '';  // reset file input
+}
+
+async function deleteCustomRMImage() {
+  if (!confirm('確定移除自訂圖片？之後建立選單會使用自動產生的圖片。')) return;
+  const res  = await fetch('/api/line-punch/richmenu/delete-custom-image', { method:'POST' });
+  const data = await res.json();
+  showToast(data.message || '已移除', 'success');
+  await checkCustomRMImage();
+}
 
 </script>
 </body>
