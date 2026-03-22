@@ -3608,15 +3608,18 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
     token = cfg.get('channel_access_token', '')
     png_bytes = None
 
-    # 1. Try custom uploaded image first
-    if os.path.exists(CUSTOM_RICHMENU_IMAGE_PATH):
-        try:
-            with open(CUSTOM_RICHMENU_IMAGE_PATH, 'rb') as f:
-                png_bytes = f.read()
-            print(f"[RICHMENU] Using custom image: {len(png_bytes)} bytes")
-        except Exception as e:
-            print(f"[RICHMENU] Failed to read custom image: {e}")
-            png_bytes = None
+    # 1. Try custom uploaded image first (.png or .jpg)
+    custom_paths = [CUSTOM_RICHMENU_IMAGE_PATH,
+                    CUSTOM_RICHMENU_IMAGE_PATH.replace('.png','.jpg')]
+    for _cp in custom_paths:
+        if os.path.exists(_cp):
+            try:
+                with open(_cp, 'rb') as f:
+                    png_bytes = f.read()
+                print(f"[RICHMENU] Using custom image {_cp}: {len(png_bytes)} bytes")
+                break
+            except Exception as e:
+                print(f"[RICHMENU] Failed to read {_cp}: {e}")
 
     # 2. Try auto-generate with Pillow
     if not png_bytes:
@@ -3678,7 +3681,8 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
             print(f"[RICHMENU] Compress failed: {ce}")
             content_type = 'image/png'
     else:
-        content_type = 'image/png'
+        # Detect format from magic bytes
+        content_type = 'image/jpeg' if png_bytes[:2] == b'\xff\xd8' else 'image/png'
 
     print(f"[RICHMENU] Uploading {len(png_bytes)} bytes as {content_type} to richmenu {rich_menu_id}")
     upload_url = f'https://api-data.line.me/v2/bot/richmenu/{rich_menu_id}/content'
@@ -3756,6 +3760,97 @@ def api_richmenu_create():
 
 
 
+
+
+@app.route('/api/line-punch/richmenu/upload-from-url', methods=['POST'])
+@login_required
+def api_richmenu_upload_from_url():
+    """Download image from Google Drive / direct URL and save as custom richmenu image."""
+    import io as _io, re as _re
+
+    b   = request.get_json(force=True)
+    url = (b.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': '請貼上圖片網址'}), 400
+
+    # Convert Google Drive share URL → direct download URL
+    # Formats:
+    #   https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+    #   https://drive.google.com/open?id=FILE_ID
+    #   https://docs.google.com/uc?id=FILE_ID
+    gd_match = _re.search(r'/file/d/([a-zA-Z0-9_-]+)', url)
+    if not gd_match:
+        gd_match = _re.search(r'[?&]id=([a-zA-Z0-9_-]+)', url)
+    if gd_match:
+        file_id  = gd_match.group(1)
+        dl_url   = f'https://drive.google.com/uc?export=download&id={file_id}'
+        confirm_url = f'https://drive.google.com/uc?export=download&confirm=t&id={file_id}'
+        print(f"[RICHMENU] Google Drive file_id={file_id}")
+    else:
+        dl_url      = url
+        confirm_url = url
+
+    # Download with redirect follow + large-file confirm cookie
+    try:
+        import urllib.request as _ur, urllib.error as _ue
+        headers = {'User-Agent': 'Mozilla/5.0'}
+
+        def _fetch(target_url):
+            req = _ur.Request(target_url, headers=headers)
+            with _ur.urlopen(req, timeout=30) as resp:
+                return resp.read(), resp.headers.get('Content-Type','')
+
+        raw, ctype = _fetch(dl_url)
+
+        # Google Drive virus-scan warning page check
+        if b'virus scan warning' in raw.lower() or b'content-disposition' not in str(ctype).lower() and len(raw) < 50000:
+            raw, ctype = _fetch(confirm_url)
+
+        if len(raw) < 1000:
+            return jsonify({'error': f'下載失敗：回傳資料太小（{len(raw)} bytes），請確認 Google Drive 已設為「知道連結的人都能查看」'}), 400
+
+    except Exception as e:
+        return jsonify({'error': f'下載失敗：{str(e)}'}), 400
+
+    # Process image with Pillow
+    try:
+        from PIL import Image as _PIM
+        img = _PIM.open(_io.BytesIO(raw)).convert('RGB')
+        orig_size = img.size
+        if img.size != (2500, 843):
+            img = img.resize((2500, 843), _PIM.LANCZOS)
+
+        # Save as JPEG (better compression, LINE accepts it)
+        buf = _io.BytesIO()
+        quality = 88
+        img.save(buf, 'JPEG', quality=quality, optimize=True)
+        while buf.tell() > 990_000 and quality > 50:
+            quality -= 10
+            buf = _io.BytesIO()
+            img.save(buf, 'JPEG', quality=quality, optimize=True)
+
+        # Save with .jpg extension but same path (reuse CUSTOM_RICHMENU_IMAGE_PATH)
+        final_bytes = buf.getvalue()
+        img_path = CUSTOM_RICHMENU_IMAGE_PATH.replace('.png', '.jpg')
+
+        with open(img_path, 'wb') as f:
+            f.write(final_bytes)
+
+        # Update CUSTOM_RICHMENU_IMAGE_PATH to point to jpg
+        # Store both extensions for compatibility
+        with open(CUSTOM_RICHMENU_IMAGE_PATH, 'wb') as f:
+            f.write(final_bytes)
+
+        return jsonify({
+            'ok': True,
+            'original_size': f'{orig_size[0]}x{orig_size[1]}',
+            'file_size_kb': len(final_bytes) // 1024,
+            'quality': quality,
+            'message': f'圖片下載成功（{len(final_bytes)//1024} KB，JPEG q{quality}），下次建立選單時將使用此圖片'
+        })
+
+    except Exception as e:
+        return jsonify({'error': f'圖片處理失敗：{str(e)}'}), 400
 
 @app.route('/api/line-punch/richmenu/upload-image', methods=['POST'])
 @login_required

@@ -1002,10 +1002,24 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
               <button class="btn btn-primary btn-sm" onclick="createRichMenu()">建立圖文選單</button>
               <button class="btn btn-outline btn-sm" onclick="loadRichMenus()">查看現有選單</button>
               <a class="btn btn-outline btn-sm" href="/api/line-punch/richmenu/preview-image" target="_blank">預覽圖片</a>
-              <button class="btn btn-outline btn-sm" onclick="document.getElementById('rm-img-upload').click()">上傳自訂圖片</button>
+              <button class="btn btn-outline btn-sm" onclick="toggleGDriveInput()">從 Google Drive 匯入</button>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('rm-img-upload').click()">上傳本機圖片</button>
               <input type="file" id="rm-img-upload" accept="image/png,image/jpeg" style="display:none" onchange="uploadCustomRMImage(this)">
               <button class="btn btn-outline btn-sm" id="rm-del-custom-btn" style="display:none;color:var(--red);border-color:var(--red)" onclick="deleteCustomRMImage()">移除自訂圖片</button>
               <button class="btn btn-ghost btn-sm" onclick="unsetRichMenu()">取消預設選單</button>
+            </div>
+            <!-- Google Drive URL input -->
+            <div id="gdrive-input-panel" style="display:none;margin-bottom:12px;padding:14px;background:var(--bg);border-radius:10px;border:1.5px solid var(--border)">
+              <div style="font-size:12px;font-weight:700;color:var(--navy);margin-bottom:8px">Google Drive 圖片連結</div>
+              <div style="font-size:11px;color:var(--muted);margin-bottom:10px">
+                1. 在 Google Drive 右鍵圖片 → 「共用」→ 設為「知道連結的人都可以查看」<br>
+                2. 複製連結貼在下方
+              </div>
+              <div style="display:flex;gap:8px">
+                <input class="filter-input" id="gdrive-url" placeholder="https://drive.google.com/file/d/..." style="flex:1;font-size:12px">
+                <button class="btn btn-primary btn-sm" onclick="importFromGDrive()" id="gdrive-import-btn">匯入</button>
+              </div>
+              <div id="gdrive-msg" style="font-size:12px;margin-top:8px;min-height:14px"></div>
             </div>
             <div id="rm-custom-status" style="display:none;font-size:12px;margin-bottom:8px;padding:8px 12px;background:var(--green-light);border-radius:8px;border:1px solid #a8dfc5;color:var(--green)">
               <strong>已上傳自訂圖片</strong> — 建立選單時將使用此圖片
@@ -5647,6 +5661,46 @@ async function deleteCustomRMImage() {
   const data = await res.json();
   showToast(data.message || '已移除', 'success');
   await checkCustomRMImage();
+}
+
+
+function toggleGDriveInput() {
+  const panel = document.getElementById('gdrive-input-panel');
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
+  if (panel.style.display !== 'none') {
+    document.getElementById('gdrive-url').focus();
+  }
+}
+
+async function importFromGDrive() {
+  const url  = document.getElementById('gdrive-url').value.trim();
+  const msg  = document.getElementById('gdrive-msg');
+  const btn  = document.getElementById('gdrive-import-btn');
+  if (!url) { msg.style.color='var(--red)'; msg.textContent='請貼上 Google Drive 連結'; return; }
+  msg.style.color = 'var(--muted)';
+  msg.textContent = '下載中，請稍候...';
+  btn.disabled = true;
+  try {
+    const res  = await fetch('/api/line-punch/richmenu/upload-from-url', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = data.error || '匯入失敗';
+    } else {
+      msg.style.color  = 'var(--green)';
+      msg.textContent  = data.message;
+      document.getElementById('gdrive-url').value = '';
+      await checkCustomRMImage();
+    }
+  } catch(e) {
+    msg.style.color = 'var(--red)';
+    msg.textContent = '網路錯誤，請重試';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 </script>
