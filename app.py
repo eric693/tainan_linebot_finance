@@ -3654,17 +3654,49 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
                      + _png_chunk(b'IEND', b''))
         print(f"[RICHMENU] Fallback PNG generated: {len(png_bytes)} bytes")
 
+    # LINE requires image <= 1MB; compress if needed
+    if len(png_bytes) > 1_000_000:
+        try:
+            from PIL import Image as _PIM
+            import io as _io2
+            img_obj = _PIM.open(_io2.BytesIO(png_bytes)).convert('RGB')
+            buf2 = _io2.BytesIO()
+            # Try JPEG which compresses much better
+            img_obj.save(buf2, 'JPEG', quality=85, optimize=True)
+            if buf2.tell() <= 1_000_000:
+                png_bytes = buf2.getvalue()
+                content_type = 'image/jpeg'
+                print(f"[RICHMENU] Converted to JPEG: {len(png_bytes)} bytes")
+            else:
+                # Try lower quality
+                buf3 = _io2.BytesIO()
+                img_obj.save(buf3, 'JPEG', quality=60, optimize=True)
+                png_bytes = buf3.getvalue()
+                content_type = 'image/jpeg'
+                print(f"[RICHMENU] Compressed JPEG q60: {len(png_bytes)} bytes")
+        except Exception as ce:
+            print(f"[RICHMENU] Compress failed: {ce}")
+            content_type = 'image/png'
+    else:
+        content_type = 'image/png'
+
+    print(f"[RICHMENU] Uploading {len(png_bytes)} bytes as {content_type} to richmenu {rich_menu_id}")
     upload_url = f'https://api-data.line.me/v2/bot/richmenu/{rich_menu_id}/content'
     req = urllib.request.Request(
         upload_url, data=png_bytes, method='POST',
-        headers={'Content-Type': 'image/png', 'Authorization': f'Bearer {token}'}
+        headers={'Content-Type': content_type, 'Authorization': f'Bearer {token}'}
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read()
+            print(f"[RICHMENU] Upload success: {resp.status} {body}")
             return resp.status, {}
     except urllib.error.HTTPError as e:
-        return e.code, {'error': e.read().decode('utf-8', errors='replace')}
+        err_body = e.read().decode('utf-8', errors='replace')
+        print(f"[RICHMENU] Upload HTTPError {e.code}: {err_body}")
+        return e.code, {'error': err_body}
     except Exception as e:
+        print(f"[RICHMENU] Upload exception: {e}")
         return 0, {'error': str(e)}
 
 
@@ -3713,10 +3745,12 @@ def api_richmenu_create():
             "UPDATE line_punch_config SET updated_at=NOW() WHERE id=1"
         )
 
+    img_ok = img_status in (200, 204)
     return jsonify({
         'ok': True,
         'rich_menu_id': rich_menu_id,
-        'image_uploaded': img_status in (200, 204),
+        'image_uploaded': img_ok,
+        'image_error': '' if img_ok else f'HTTP {img_status}: {img_data}',
         'set_default': status2 in (200, 204)
     })
 

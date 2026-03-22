@@ -4921,7 +4921,18 @@ async function createRichMenu() {
       return;
     }
     msg.style.color = 'var(--green)';
-    msg.textContent = `圖文選單已建立！ID：${data.rich_menu_id}${data.image_uploaded ? '' : '（圖片上傳失敗，選單仍可使用）'}`;
+    if (data.image_uploaded) {
+      msg.style.color = 'var(--green)';
+      msg.textContent = `圖文選單已建立！ID：${data.rich_menu_id}`;
+    } else {
+      msg.style.color = 'var(--orange)';
+      msg.textContent = `圖文選單已建立！ID：${data.rich_menu_id}`;
+      if (data.image_error) {
+        msg.textContent += `\n圖片上傳失敗：${data.image_error}`;
+      } else {
+        msg.textContent += '（圖片上傳失敗，選單仍可使用）';
+      }
+    }
     showToast('圖文選單建立成功，員工重新開啟聊天即可看到', 'success');
     await loadRichMenus();
   } catch(e) {
