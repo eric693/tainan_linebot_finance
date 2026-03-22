@@ -597,7 +597,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
         <div class="table-wrap">
           <table>
             <thead><tr><th>代碼</th><th>品名</th><th>分類</th><th>進貨單位</th><th>單位內容</th><th>進貨成本</th><th>最低庫存</th><th>廠商</th><th>操作</th></tr></thead>
-            <tbody id="items-tbody"><tr><td colspan="9" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
+            <tbody id="items-tbody"><tr><td colspan="10" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -1218,7 +1218,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>姓名</th><th>帳號</th><th>部門</th><th>職稱</th><th>到職日</th><th>底薪</th><th>投保薪資</th><th>狀態</th><th>操作</th></tr></thead>
+            <thead><tr><th>姓名</th><th>帳號</th><th>部門</th><th>職稱</th><th>到職日</th><th>底薪</th><th>投保薪資</th><th>排休配額</th><th>狀態</th><th>操作</th></tr></thead>
             <tbody id="sal-emp-tbody"><tr><td colspan="9" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
           </table>
         </div>
@@ -1291,6 +1291,15 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
           <div style="font-size:11px;color:var(--muted);margin-top:3px">用於計算當月生日禮金</div>
         </div>
         <div></div>
+      </div>
+      <div class="form-row" style="margin-bottom:8px">
+        <div>
+          <label class="form-label">個人排休配額（天/月）</label>
+          <input class="form-input" type="number" id="sem-vac-quota" placeholder="空白 = 使用月份預設值" min="0" max="31">
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">
+            設定後此員工可排假天數將不受月份預設限制（例如特休員工可設 12 天）
+          </div>
+        </div>
       </div>
       <div style="margin-bottom:12px">
         <label class="form-label">計薪方式</label>
@@ -4726,6 +4735,11 @@ async function loadSalEmps() {
       <td style="font-size:12px">${e.hire_date||'—'}</td>
       <td style="font-family:'DM Mono',monospace;text-align:right">$${Number(e.base_salary||0).toLocaleString()}</td>
       <td style="font-family:'DM Mono',monospace;text-align:right">$${Number(e.insured_salary||0).toLocaleString()}</td>
+      <td style="text-align:center;font-size:12px">
+        ${e.vacation_quota != null
+          ? `<span style="font-weight:700;color:var(--accent)">${e.vacation_quota}天</span><div style="font-size:10px;color:var(--muted)">個人配額</div>`
+          : '<span style="color:var(--muted)">預設</span>'}
+      </td>
       <td>${e.active ? '<span class="badge badge-ok">在職</span>' : '<span class="badge badge-warn">停用</span>'}</td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="openSalEmpModal(${e.id})">設定薪資</button>
@@ -4748,6 +4762,7 @@ function openSalEmpModal(id) {
   document.getElementById('sem-birth').value        = e.birth_date || '';
   document.getElementById('sem-base').value         = e.base_salary || 0;
   document.getElementById('sem-insured').value      = e.insured_salary || 0;
+  document.getElementById('sem-vac-quota').value       = e.vacation_quota ?? '';
   document.getElementById('sem-daily-hours').value  = e.daily_hours || 8;
   document.getElementById('sem-ot-rate1').value     = e.ot_rate1 || 1.33;
   document.getElementById('sem-ot-rate2').value     = e.ot_rate2 || 1.67;
@@ -4776,6 +4791,8 @@ async function saveSalEmp() {
     birth_date:     document.getElementById('sem-birth').value || null,
     base_salary:    isHourly ? 0 : (parseFloat(document.getElementById('sem-base').value) || 0),
     insured_salary: parseFloat(document.getElementById('sem-insured').value) || 0,
+    vacation_quota: document.getElementById('sem-vac-quota').value !== ''
+      ? parseInt(document.getElementById('sem-vac-quota').value) : null,
     daily_hours:    parseFloat(document.getElementById('sem-daily-hours').value) || 8,
     ot_rate1:       parseFloat(document.getElementById('sem-ot-rate1').value) || 1.33,
     ot_rate2:       parseFloat(document.getElementById('sem-ot-rate2').value) || 1.67,

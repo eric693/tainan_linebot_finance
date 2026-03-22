@@ -444,6 +444,7 @@ def init_db():
         "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS salary_type TEXT DEFAULT 'monthly'",
         "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(12,2) DEFAULT 0",
         "ALTER TABLE overtime_requests ADD COLUMN IF NOT EXISTS day_type TEXT DEFAULT 'weekday'",
+        "ALTER TABLE punch_staff ADD COLUMN IF NOT EXISTS vacation_quota INT DEFAULT NULL",
     ]
     for sql in migrations:
         try:
@@ -2124,10 +2125,22 @@ def get_off_counts(conn, month):
 
 @app.route('/api/schedule/config/<month>', methods=['GET'])
 def api_sched_config_get(month):
-    """Public: get month config + off-count map."""
+    """Public: get month config + off-count map.
+    If employee is logged in, returns their personal vacation_quota (if set)
+    overriding the monthly default.
+    """
+    sid = session.get('punch_staff_id')
     with get_db() as conn:
-        cfg    = get_schedule_config(conn, month)
+        cfg    = dict(get_schedule_config(conn, month))
         counts = get_off_counts(conn, month)
+        # Per-employee quota override
+        if sid:
+            row = conn.execute(
+                "SELECT vacation_quota FROM punch_staff WHERE id=%s", (sid,)
+            ).fetchone()
+            if row and row['vacation_quota'] is not None:
+                cfg['vacation_quota'] = int(row['vacation_quota'])
+                cfg['quota_personal'] = True
     return jsonify({**cfg, 'off_counts': counts})
 
 @app.route('/api/schedule/my-request/<month>', methods=['GET'])
@@ -2165,10 +2178,18 @@ def api_sched_submit():
         with get_db() as conn:
             cfg = get_schedule_config(conn, month)
 
+            # Get effective quota: per-employee > monthly default
+            staff_row = conn.execute(
+                "SELECT vacation_quota FROM punch_staff WHERE id=%s", (sid,)
+            ).fetchone()
+            personal_quota = staff_row['vacation_quota'] if staff_row and staff_row['vacation_quota'] is not None else None
+            effective_quota = personal_quota if personal_quota is not None else cfg['vacation_quota']
+
             # Check quota
-            if len(dates) > cfg['vacation_quota']:
+            if len(dates) > effective_quota:
+                quota_source = '個人配額' if personal_quota is not None else '月份預設配額'
                 return jsonify({
-                    'error': f'申請天數（{len(dates)}天）超過本月配額（{cfg["vacation_quota"]}天）'
+                    'error': f'申請天數（{len(dates)}天）超過{quota_source}（{effective_quota}天）'
                 }), 422
 
             # Check per-day max (exclude self)
@@ -2988,6 +3009,7 @@ def api_sal_emp_update(eid):
               base_salary=%s, insured_salary=%s,
               daily_hours=%s, ot_rate1=%s, ot_rate2=%s,
               salary_type=%s, hourly_rate=%s,
+              vacation_quota=%s,
               salary_notes=%s, updated_at=NOW()
             WHERE id=%s RETURNING *
         """, (b.get('employee_code','').strip(),
@@ -3002,6 +3024,7 @@ def api_sal_emp_update(eid):
               float(b.get('ot_rate2') or 1.67),
               b.get('salary_type','monthly'),
               float(b.get('hourly_rate') or 0),
+              int(b['vacation_quota']) if b.get('vacation_quota') not in (None, '', 'null') else None,
               b.get('salary_notes','').strip(),
               eid)).fetchone()
     return jsonify(sal_emp_row(row)) if row else ('', 404)
@@ -3173,6 +3196,8 @@ def api_sal_generate(month):
                    COALESCE(daily_hours,8)    as daily_hours,
                    COALESCE(ot_rate1,1.33)    as ot_rate1,
                    COALESCE(ot_rate2,1.67)    as ot_rate2,
+                   salary_type, hourly_rate,
+                   vacation_quota,
                    hire_date, birth_date, active
             FROM punch_staff WHERE active=TRUE ORDER BY name
         """).fetchall()
