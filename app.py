@@ -3802,8 +3802,15 @@ def api_richmenu_upload_from_url():
 
         raw, ctype = _fetch(dl_url)
 
-        # Google Drive virus-scan warning page check
-        if b'virus scan warning' in raw.lower() or b'content-disposition' not in str(ctype).lower() and len(raw) < 50000:
+        # Google Drive virus-scan warning page check (all comparisons must be same type)
+        raw_text_sample = raw[:2000].decode('utf-8', errors='ignore').lower()
+        ctype_str = str(ctype).lower()
+        is_html_warning = (
+            'virus scan warning' in raw_text_sample or
+            'content-disposition' not in ctype_str and len(raw) < 80000
+        )
+        if is_html_warning:
+            print(f"[RICHMENU] GDrive warning page detected, trying confirm URL")
             raw, ctype = _fetch(confirm_url)
 
         if len(raw) < 1000:
