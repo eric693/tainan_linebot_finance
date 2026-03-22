@@ -3440,31 +3440,33 @@ def _build_richmenu_body(gps_required, staff_url=''):
       Bottom-Left:  休息開始 (Break Out)
       Bottom-Right: 休息結束 (Break In)
     """
-    # Center area: 700x400 pixels centered in 2500x843
-    cx, cy = 900, 221
-    cw, ch = 700, 400
+    # Center area: 700x800 pixels centered in 2500x1686
+    cx, cy = 900, 443
+    cw, ch = 700, 800
 
     # Four corner areas avoid the center
+    # Full height = 1686, half = 843
+    half = 843
     areas = [
         # Top-Left: Clock In
-        {"bounds": {"x": 0,    "y": 0,   "width": 900,  "height": 421},
+        {"bounds": {"x": 0,    "y": 0,      "width": 900,  "height": half},
          "action": {"type": "message", "text": "上班"}},
         # Top-Right: Clock Out
-        {"bounds": {"x": 1600, "y": 0,   "width": 900,  "height": 421},
+        {"bounds": {"x": 1600, "y": 0,      "width": 900,  "height": half},
          "action": {"type": "message", "text": "下班"}},
         # Bottom-Left: Break Out
-        {"bounds": {"x": 0,    "y": 422, "width": 900,  "height": 421},
+        {"bounds": {"x": 0,    "y": half,   "width": 900,  "height": half},
          "action": {"type": "message", "text": "休息"}},
         # Bottom-Right: Break In
-        {"bounds": {"x": 1600, "y": 422, "width": 900,  "height": 421},
+        {"bounds": {"x": 1600, "y": half,   "width": 900,  "height": half},
          "action": {"type": "message", "text": "回來"}},
-        # Center: Staff system link
+        # Center top: Staff system link
         {"bounds": {"x": cx, "y": cy, "width": cw, "height": ch},
          "action": {"type": "uri", "uri": staff_url or "https://example.com/staff"}},
     ]
 
     return {
-        "size":       {"width": 2500, "height": 843},
+        "size":       {"width": 2500, "height": 1686},
         "selected":   True,
         "name":       "舒室圈打卡選單",
         "chatBarText": "打卡",
@@ -3518,15 +3520,15 @@ def _make_richmenu_png():
     import io, os
     from PIL import Image, ImageDraw, ImageFont
 
-    W, H = 2500, 843
+    W, H = 2500, 1686
     img  = Image.new('RGB', (W, H), '#0f1c3a')
     draw = ImageDraw.Draw(img)
 
     panels = [
-        (0,    0,   1250, 421, '#2e9e6b', 'Clock In'),
-        (1250, 0,   2500, 421, '#d64242', 'Clock Out'),
-        (0,    422, 1250, 843, '#e07b2a', 'Break Out'),
-        (1250, 422, 2500, 843, '#4a7bda', 'Break In'),
+        (0,    0,    1250, 843,  '#2e9e6b', 'Clock In'),
+        (1250, 0,    2500, 843,  '#d64242', 'Clock Out'),
+        (0,    843,  1250, 1686, '#e07b2a', 'Break Out'),
+        (1250, 843,  2500, 1686, '#4a7bda', 'Break In'),
     ]
 
     import os
@@ -3591,8 +3593,8 @@ def _make_richmenu_png():
         tw, th = bb[2] - bb[0], bb[3] - bb[1]
         draw.text((cx - tw // 2, cy - th // 2), label, fill='#ffffff', font=font)
 
-    draw.rectangle([1248, 0, 1252, H], fill='#0f1c3a')
-    draw.rectangle([0, 419, W, 423],   fill='#0f1c3a')
+    draw.rectangle([1248, 0, 1252, H],   fill='#0f1c3a')
+    draw.rectangle([0, 841, W, 845],    fill='#0f1c3a')
 
     buf = io.BytesIO()
     img.save(buf, 'PNG', optimize=True)
@@ -3638,15 +3640,15 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
             c = struct.pack('>I', len(data)) + name + data
             return c + struct.pack('>I', zlib.crc32(c[4:]) & 0xffffffff)
 
-        W, H = 2500, 843
+        W, H = 2500, 1686
         colors = [(0x2e,0x9e,0x6b),(0xd6,0x42,0x42),(0xe0,0x7b,0x2a),(0x4a,0x7b,0xda)]
         rows = []
         for y in range(H):
             row = bytearray()
             for x in range(W):
-                p = (0 if y < 422 else 1) * 2 + (0 if x < 1250 else 1)
+                p = (0 if y < 843 else 1) * 2 + (0 if x < 1250 else 1)
                 r, g, b = colors[p]
-                if x in (1249, 1250) or y in (421, 422):
+                if x in (1249, 1250) or y in (842, 843):
                     r, g, b = 0x0f, 0x1c, 0x3a
                 row += bytes([r, g, b])
             rows.append(bytes([0]) + bytes(row))
@@ -3824,8 +3826,8 @@ def api_richmenu_upload_from_url():
         from PIL import Image as _PIM
         img = _PIM.open(_io.BytesIO(raw)).convert('RGB')
         orig_size = img.size
-        if img.size != (2500, 843):
-            img = img.resize((2500, 843), _PIM.LANCZOS)
+        if img.size != (2500, 1686):
+            img = img.resize((2500, 1686), _PIM.LANCZOS)
 
         # Save as JPEG (better compression, LINE accepts it)
         buf = _io.BytesIO()
