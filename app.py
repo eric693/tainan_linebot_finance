@@ -3441,7 +3441,7 @@ def _build_richmenu_body(gps_required, staff_url=''):
     return {
         "size":       {"width": 2500, "height": 843},
         "selected":   True,
-        "name":       "打卡選單",
+        "name":       "舒室圈打卡選單",
         "chatBarText": "打卡",
         "areas": areas
     }
@@ -3581,20 +3581,29 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
     import io, os
 
     token = cfg.get('channel_access_token', '')
+    png_bytes = None
 
-    # Use custom uploaded image if available
+    # 1. Try custom uploaded image first
     if os.path.exists(CUSTOM_RICHMENU_IMAGE_PATH):
-        with open(CUSTOM_RICHMENU_IMAGE_PATH, 'rb') as f:
-            png_bytes = f.read()
-        print(f"[RICHMENU] Using custom image: {len(png_bytes)} bytes")
-    else:
+        try:
+            with open(CUSTOM_RICHMENU_IMAGE_PATH, 'rb') as f:
+                png_bytes = f.read()
+            print(f"[RICHMENU] Using custom image: {len(png_bytes)} bytes")
+        except Exception as e:
+            print(f"[RICHMENU] Failed to read custom image: {e}")
+            png_bytes = None
+
+    # 2. Try auto-generate with Pillow
+    if not png_bytes:
         try:
             png_bytes = _make_richmenu_png()
             print(f"[RICHMENU] Generated PNG: {len(png_bytes)} bytes")
-
         except Exception as e:
-            # Fallback: plain colored blocks (no text) using struct/zlib
             print(f"[RICHMENU] Pillow failed ({e}), using plain PNG fallback")
+            png_bytes = None
+
+    # 3. Final fallback: plain colored blocks (no text, pure Python)
+    if not png_bytes:
         import struct, zlib
 
         def _png_chunk(name, data):
@@ -3609,8 +3618,8 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
             for x in range(W):
                 p = (0 if y < 422 else 1) * 2 + (0 if x < 1250 else 1)
                 r, g, b = colors[p]
-                if x in (1249,1250) or y in (421,422):
-                    r,g,b = 0x0f,0x1c,0x3a
+                if x in (1249, 1250) or y in (421, 422):
+                    r, g, b = 0x0f, 0x1c, 0x3a
                 row += bytes([r, g, b])
             rows.append(bytes([0]) + bytes(row))
         compressed = zlib.compress(b''.join(rows), 1)
@@ -3618,6 +3627,7 @@ def _create_richmenu_image(rich_menu_id, cfg, gps_required):
                      + _png_chunk(b'IHDR', struct.pack('>IIBBBBB', W, H, 8, 2, 0, 0, 0))
                      + _png_chunk(b'IDAT', compressed)
                      + _png_chunk(b'IEND', b''))
+        print(f"[RICHMENU] Fallback PNG generated: {len(png_bytes)} bytes")
 
     upload_url = f'https://api-data.line.me/v2/bot/richmenu/{rich_menu_id}/content'
     req = urllib.request.Request(
