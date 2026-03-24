@@ -4412,12 +4412,34 @@ function salItemChange(idx, field, val) {
 }
 function salItemDel(idx) {
   salEditRec._items.splice(idx, 1);
-  openSalRecModal(salEditRec.id);  // re-render
+  renderSalModalItems();  // re-render without re-fetching
 }
 function salAddItem(type) {
   salEditRec._items.push({ component_name: '', comp_type: type, amount: 0, note: '', component_id: null });
   openSalRecModal(salEditRec.id);
 }
+function renderSalModalItems() {
+  if (!salEditRec) return;
+  const allowances = salEditRec._items.filter(i => i.comp_type === 'allowance');
+  const deductions = salEditRec._items.filter(i => i.comp_type === 'deduction');
+  const aLen = allowances.length;
+
+  function itemRow(it, idx) {
+    return `<tr id="srit-${idx}">
+      <td><input class="ocr-edit-input" value="${escHtml(it.component_name)}" onchange="salItemChange(${idx},'component_name',this.value)"></td>
+      <td style="width:110px"><input class="ocr-edit-input num" type="number" value="${it.amount}" onchange="salItemChange(${idx},'amount',this.value)" style="text-align:right"></td>
+      <td><input class="ocr-edit-input" value="${escHtml(it.note||'')}" placeholder="選填" onchange="salItemChange(${idx},'note',this.value)" style="color:var(--muted)"></td>
+      <td style="width:32px;text-align:center"><button class="ocr-row-del" onclick="salItemDel(${idx})">&times;</button></td>
+    </tr>`;
+  }
+
+  const allowBodies = allowances.map((it, i) => itemRow(it, i));
+  const deductBodies = deductions.map((it, i) => itemRow(it, i + aLen));
+  document.getElementById('srm2-allow').innerHTML  = allowBodies.join('');
+  document.getElementById('srm2-deduct').innerHTML = deductBodies.join('');
+  updateSalTotals();
+}
+
 function updateSalTotals() {
   const items = salEditRec._items;
   const gross  = items.filter(i=>i.comp_type==='allowance').reduce((s,i)=>s+(parseFloat(i.amount)||0),0);
