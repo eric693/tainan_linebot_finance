@@ -4415,8 +4415,9 @@ function salItemDel(idx) {
   renderSalModalItems();  // re-render without re-fetching
 }
 function salAddItem(type) {
+  if (!salEditRec || !salEditRec._items) return;
   salEditRec._items.push({ component_name: '', comp_type: type, amount: 0, note: '', component_id: null });
-  openSalRecModal(salEditRec.id);
+  renderSalModalItems();
 }
 function renderSalModalItems() {
   if (!salEditRec) return;
