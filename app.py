@@ -3278,15 +3278,52 @@ def api_sal_generate(month):
                 skipped.append(staff['name']); continue
 
             birth_ok = _is_birth_month(staff.get('birth_date'), month)
+            is_hourly = (staff.get('salary_type') or 'monthly') == 'hourly'
             items_data = []
             for comp in comps:
                 if comp['is_birthday'] and not birth_ok: continue
+                # 時薪員工跳過以底薪為基礎的公式項目（底薪=0，改用排班時薪）
+                if is_hourly and comp['calc_type'] == 'formula' and comp['formula'] and \
+                        'base_salary' in (comp['formula'] or '') and comp['comp_type'] == 'allowance':
+                    continue
                 amount = _compute_item_amount(comp, staff, month)
                 items_data.append({
                     'component_id': comp['id'], 'component_name': comp['name'],
                     'comp_type': comp['comp_type'], 'amount': amount,
                     'note': '生日禮金' if comp['is_birthday'] else ''
                 })
+
+            # ── 時薪員工：依排班計算基本薪資 ─────────────────────
+            if is_hourly:
+                try:
+                    h_rate = float(staff.get('hourly_rate') or 0)
+                    if h_rate > 0:
+                        shift_rows = conn.execute(
+                            """SELECT CASE
+                                   WHEN st.end_time > st.start_time
+                                   THEN EXTRACT(EPOCH FROM (st.end_time - st.start_time))/3600
+                                   ELSE EXTRACT(EPOCH FROM (st.end_time - st.start_time))/3600 + 24
+                               END AS hours,
+                               st.name AS shift_name
+                               FROM shift_assignments sa
+                               JOIN shift_types st ON st.id = sa.shift_type_id
+                               WHERE sa.staff_id = %s
+                                 AND to_char(sa.shift_date,'YYYY-MM') = %s""",
+                            (staff['id'], month)
+                        ).fetchall()
+                        total_hours = sum(float(r['hours']) for r in shift_rows)
+                        if total_hours > 0:
+                            base_pay = round(total_hours * h_rate, 0)
+                            items_data.append({
+                                'component_id': None,
+                                'component_name': '排班時薪',
+                                'comp_type': 'allowance',
+                                'amount': base_pay,
+                                'note': f'{total_hours:.1f}h × {h_rate:.0f}元/時（共{len(shift_rows)}班）'
+                            })
+                except Exception as _sh_e:
+                    print(f"[SHIFT PAY] {staff['name']}: {_sh_e}")
+            # ─────────────────────────────────────────────────────
 
             # ── Overtime calculation from punch records ──────────
             try:
