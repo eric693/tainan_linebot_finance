@@ -383,7 +383,7 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
         <div id="leave-balance-wrap" style="margin-bottom:14px"></div>
 
         <!-- Submit form -->
-        <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px">
           <div class="section-label" style="margin-bottom:12px">申請請假</div>
           <div style="margin-bottom:10px">
             <div class="fl">假別</div>
@@ -1398,7 +1398,7 @@ async function loadMyLeaveBalances() {
       <span style="color:${color};font-weight:700">已用${b.used_days}/${limitStr}天（剩餘：${remaining !== '無上限' ? remaining+'天' : '無上限'}）</span>
     </div>`;
   }).join('');
-  wrap.innerHTML = `<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:4px">
+  wrap.innerHTML = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:4px">
     <div class="section-label" style="margin-bottom:8px">${year} 年假別餘額</div>
     ${items}
   </div>`;
@@ -1439,6 +1439,7 @@ async function submitLeaveRequest() {
   const proxy  = document.getElementById('lv-proxy').value.trim();
   const errEl  = document.getElementById('lv-err');
   errEl.textContent = '';
+  errEl.style.color = 'var(--red)';
 
   if (!typeId) { errEl.textContent='請選擇假別'; return; }
   if (!start || !end) { errEl.textContent='請填寫日期'; return; }
@@ -1488,7 +1489,7 @@ function renderMyLeaveRequests() {
     const cancelBtn = r.status === 'pending'
       ? `<button onclick="cancelLeaveRequest(${r.id})" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--red);cursor:pointer">撤銷</button>`
       : '';
-    return `<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
         <span style="font-weight:700;color:var(--navy)">${r.leave_type_name}</span>
         <span style="color:${sc};font-weight:700;font-size:12px">${sl}</span>

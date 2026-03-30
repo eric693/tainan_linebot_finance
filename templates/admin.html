@@ -5910,11 +5910,6 @@ async function loadLeaveRequests() {
   leaveRequests = Array.isArray(data) ? data : [];
   document.getElementById('leave-req-count').textContent = `共 ${leaveRequests.length} 筆`;
   renderLeaveRequests();
-  // update badge
-  const pending = leaveRequests.filter(r=>r.status==='pending').length;
-  const badge = document.getElementById('badge-leave');
-  badge.textContent = pending;
-  badge.style.display = pending ? '' : 'none';
 }
 
 const LEAVE_STATUS_LABEL = { pending:'待審核', approved:'已核准', rejected:'已退回' };
