@@ -3335,6 +3335,38 @@ def api_sal_generate(month):
             except Exception as _ot_e2:
                 print(f"[OT REQ] {staff['name']}: {_ot_e2}")
 
+            # ── 請假扣薪計算 ──────────────────────────────────────
+            try:
+                unpaid_leaves = conn.execute(
+                    """SELECT lr.total_days, lr.leave_type_name,
+                              COALESCE(lt.salary_rate, 1.0) as salary_rate
+                       FROM leave_requests lr
+                       JOIN leave_types lt ON lt.id = lr.leave_type_id
+                       WHERE lr.staff_id = %s
+                         AND to_char(lr.start_date,'YYYY-MM') = %s
+                         AND lr.status = 'approved'
+                         AND COALESCE(lt.salary_rate, 1.0) < 1.0""",
+                    (staff['id'], month)
+                ).fetchall()
+                base_sal = float(staff.get('base_salary') or 0)
+                if base_sal > 0:
+                    for lv in unpaid_leaves:
+                        rate = float(lv['salary_rate'])
+                        days = float(lv['total_days'])
+                        deduct_amount = round(base_sal / 30 * days * (1 - rate), 0)
+                        if deduct_amount > 0:
+                            pct = int((1 - rate) * 100)
+                            items_data.append({
+                                'component_id': None,
+                                'component_name': f'{lv["leave_type_name"]}扣薪',
+                                'comp_type': 'deduction',
+                                'amount': deduct_amount,
+                                'note': f'{days}天 × 底薪÷30 × {pct}%'
+                            })
+            except Exception as _lv_e:
+                print(f"[LEAVE DEDUCT] {staff['name']}: {_lv_e}")
+            # ─────────────────────────────────────────────────────
+
             gross  = sum(i['amount'] for i in items_data if i['comp_type'] == 'allowance')
             deduct = sum(i['amount'] for i in items_data if i['comp_type'] == 'deduction')
             net    = gross - deduct
