@@ -412,6 +412,69 @@ def init_db():
                     created_at      TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS leave_types (
+                    id              SERIAL PRIMARY KEY,
+                    name            TEXT NOT NULL,
+                    salary_rate     NUMERIC(4,2) DEFAULT 1.0,
+                    annual_limit    NUMERIC(5,1) DEFAULT NULL,
+                    limit_note      TEXT DEFAULT '',
+                    is_active       BOOLEAN DEFAULT TRUE,
+                    sort_order      INT DEFAULT 0,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS leave_requests (
+                    id              SERIAL PRIMARY KEY,
+                    staff_id        INT REFERENCES punch_staff(id) ON DELETE CASCADE,
+                    leave_type_id   INT REFERENCES leave_types(id),
+                    leave_type_name TEXT DEFAULT '',
+                    start_date      DATE NOT NULL,
+                    end_date        DATE NOT NULL,
+                    start_half      BOOLEAN DEFAULT FALSE,
+                    end_half        BOOLEAN DEFAULT FALSE,
+                    total_days      NUMERIC(5,1) NOT NULL,
+                    reason          TEXT DEFAULT '',
+                    proxy_name      TEXT DEFAULT '',
+                    status          TEXT DEFAULT 'pending',
+                    reviewed_by     TEXT DEFAULT '',
+                    review_note     TEXT DEFAULT '',
+                    reviewed_at     TIMESTAMPTZ,
+                    created_at      TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS leave_balances (
+                    id              SERIAL PRIMARY KEY,
+                    staff_id        INT REFERENCES punch_staff(id) ON DELETE CASCADE,
+                    leave_type_id   INT REFERENCES leave_types(id),
+                    year            INT NOT NULL,
+                    used_days       NUMERIC(5,1) DEFAULT 0,
+                    UNIQUE(staff_id, leave_type_id, year)
+                )
+            """)
+            # Seed default leave types if empty
+            existing = conn.execute("SELECT COUNT(*) as cnt FROM leave_types").fetchone()
+            if existing['cnt'] == 0:
+                defaults = [
+                    ('特休假', 1.0, None,  '依勞基法計算',        0),
+                    ('病假',   0.5, 30.0,  '30 天',              1),
+                    ('住院病假',1.0, 30.0, '30 天',              2),
+                    ('事假',   0.0, 14.0,  '14 天',              3),
+                    ('生理假', 0.5, 12.0,  '每月 1 天，年計 12 天', 4),
+                    ('婚假',   1.0,  8.0,  '8 天',               5),
+                    ('喪假',   1.0,  8.0,  '依親屬關係 3~8 天',   6),
+                    ('產假',   1.0, 56.0,  '56 天（8 週）',       7),
+                    ('陪產假', 1.0,  7.0,  '7 天',               8),
+                    ('公假',   1.0, None,  '無上限',              9),
+                    ('補休',   1.0, None,  '無上限',              10),
+                ]
+                for name, rate, limit, note, sort in defaults:
+                    conn.execute("""
+                        INSERT INTO leave_types (name, salary_rate, annual_limit, limit_note, sort_order)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (name, rate, limit, note, sort))
         print("[OK] Database tables created")
     except Exception as e:
         print(f"[ERROR] init_db failed: {e}")
@@ -4616,6 +4679,406 @@ def api_ot_calc_preview():
         'ot_rate2':      float(staff.get('ot_rate2') or 1.67),
         'ot_pay':        ot_pay,
     })
+
+# ═══════════════════════════════════════════════════════════════════
+# Leave Management (請假管理) API
+# ═══════════════════════════════════════════════════════════════════
+
+def _calc_annual_leave_days(hire_date):
+    """Calculate annual leave days based on tenure (勞基法第38條)."""
+    from datetime import date as _date
+    today = _date.today()
+    if not hire_date:
+        return 0
+    # years and months of service
+    years  = (today - hire_date).days / 365.25
+    if years < 0.5:
+        return 0
+    elif years < 1:
+        return 3
+    elif years < 2:
+        return 7
+    elif years < 3:
+        return 10
+    elif years < 5:
+        return 14
+    elif years < 10:
+        return 15
+    else:
+        extra = int(years) - 10
+        return min(15 + 1 + extra, 30)
+
+
+def _count_leave_days(start_date, end_date, start_half=False, end_half=False):
+    """Count leave days excluding Sundays. Half-day = 0.5."""
+    from datetime import timedelta as _td
+    if start_date > end_date:
+        return 0.0
+    total = 0.0
+    cur = start_date
+    while cur <= end_date:
+        if cur.weekday() != 6:  # exclude Sunday
+            day_val = 1.0
+            if cur == start_date and start_half:
+                day_val = 0.5
+            elif cur == end_date and end_half:
+                day_val = 0.5
+            total += day_val
+        cur += _td(days=1)
+    return total
+
+
+def leave_type_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('salary_rate') is not None: d['salary_rate'] = float(d['salary_rate'])
+    if d.get('annual_limit') is not None: d['annual_limit'] = float(d['annual_limit'])
+    if d.get('created_at'): d['created_at'] = d['created_at'].isoformat()
+    return d
+
+
+def leave_req_row(row):
+    if not row: return None
+    d = dict(row)
+    if d.get('start_date'): d['start_date'] = d['start_date'].isoformat()
+    if d.get('end_date'):   d['end_date']   = d['end_date'].isoformat()
+    if d.get('total_days') is not None: d['total_days'] = float(d['total_days'])
+    if d.get('reviewed_at'): d['reviewed_at'] = d['reviewed_at'].isoformat()
+    if d.get('created_at'):  d['created_at']  = d['created_at'].isoformat()
+    return d
+
+
+# ── Leave Types CRUD (Admin) ─────────────────────────────────────
+
+@app.route('/api/leave/types', methods=['GET'])
+def api_leave_types_list():
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM leave_types ORDER BY sort_order, id
+        """).fetchall()
+    return jsonify([leave_type_row(r) for r in rows])
+
+
+@app.route('/api/leave/types', methods=['POST'])
+@login_required
+def api_leave_types_create():
+    b = request.get_json(force=True)
+    name        = b.get('name','').strip()
+    salary_rate = float(b.get('salary_rate', 1.0))
+    annual_limit = b.get('annual_limit')
+    annual_limit = float(annual_limit) if annual_limit not in (None, '') else None
+    limit_note  = b.get('limit_note','').strip()
+    sort_order  = int(b.get('sort_order', 0))
+    if not name:
+        return jsonify({'error': '請填寫假別名稱'}), 400
+    with get_db() as conn:
+        row = conn.execute("""
+            INSERT INTO leave_types (name, salary_rate, annual_limit, limit_note, sort_order)
+            VALUES (%s, %s, %s, %s, %s) RETURNING *
+        """, (name, salary_rate, annual_limit, limit_note, sort_order)).fetchone()
+    return jsonify(leave_type_row(row)), 201
+
+
+@app.route('/api/leave/types/<int:tid>', methods=['PUT'])
+@login_required
+def api_leave_types_update(tid):
+    b = request.get_json(force=True)
+    name        = b.get('name','').strip()
+    salary_rate = float(b.get('salary_rate', 1.0))
+    annual_limit = b.get('annual_limit')
+    annual_limit = float(annual_limit) if annual_limit not in (None, '') else None
+    limit_note  = b.get('limit_note','').strip()
+    sort_order  = int(b.get('sort_order', 0))
+    is_active   = bool(b.get('is_active', True))
+    if not name:
+        return jsonify({'error': '請填寫假別名稱'}), 400
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE leave_types SET name=%s, salary_rate=%s, annual_limit=%s,
+              limit_note=%s, sort_order=%s, is_active=%s
+            WHERE id=%s RETURNING *
+        """, (name, salary_rate, annual_limit, limit_note, sort_order, is_active, tid)).fetchone()
+    if not row: return ('', 404)
+    return jsonify(leave_type_row(row))
+
+
+@app.route('/api/leave/types/<int:tid>', methods=['DELETE'])
+@login_required
+def api_leave_types_delete(tid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM leave_types WHERE id=%s", (tid,))
+    return jsonify({'deleted': tid})
+
+
+# ── Leave Requests (Employee) ────────────────────────────────────
+
+@app.route('/api/leave/my-requests', methods=['GET'])
+def api_leave_my_list():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM leave_requests
+            WHERE staff_id=%s ORDER BY created_at DESC LIMIT 50
+        """, (sid,)).fetchall()
+    return jsonify([leave_req_row(r) for r in rows])
+
+
+@app.route('/api/leave/my-requests', methods=['POST'])
+def api_leave_submit():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    b = request.get_json(force=True)
+    leave_type_id = b.get('leave_type_id')
+    start_date    = b.get('start_date','').strip()
+    end_date      = b.get('end_date','').strip()
+    start_half    = bool(b.get('start_half', False))
+    end_half      = bool(b.get('end_half', False))
+    reason        = b.get('reason','').strip()
+    proxy_name    = b.get('proxy_name','').strip()
+
+    if not leave_type_id or not start_date or not end_date:
+        return jsonify({'error': '請填寫假別、起始與結束日期'}), 400
+
+    from datetime import date as _date2
+    try:
+        sd = _date2.fromisoformat(start_date)
+        ed = _date2.fromisoformat(end_date)
+    except ValueError:
+        return jsonify({'error': '日期格式錯誤'}), 400
+
+    if ed < sd:
+        return jsonify({'error': '結束日期不可早於開始日期'}), 400
+
+    total_days = _count_leave_days(sd, ed, start_half, end_half)
+    if total_days <= 0:
+        return jsonify({'error': '請假天數為零，請確認日期（系統排除週日）'}), 400
+
+    with get_db() as conn:
+        lt = conn.execute("SELECT * FROM leave_types WHERE id=%s AND is_active=TRUE", (leave_type_id,)).fetchone()
+        if not lt:
+            return jsonify({'error': '無效的假別'}), 400
+
+        # Check annual limit
+        if lt['annual_limit'] is not None:
+            year = sd.year
+            used_row = conn.execute("""
+                SELECT COALESCE(SUM(total_days),0) as used
+                FROM leave_requests
+                WHERE staff_id=%s AND leave_type_id=%s
+                  AND EXTRACT(YEAR FROM start_date)=%s
+                  AND status != 'rejected'
+            """, (sid, leave_type_id, year)).fetchone()
+            used = float(used_row['used']) if used_row else 0.0
+            limit = float(lt['annual_limit'])
+
+            # For annual leave, calculate actual entitlement
+            if lt['name'] == '特休假':
+                staff_row = conn.execute(
+                    "SELECT hire_date FROM punch_staff WHERE id=%s", (sid,)
+                ).fetchone()
+                if staff_row and staff_row['hire_date']:
+                    limit = float(_calc_annual_leave_days(staff_row['hire_date']))
+                else:
+                    limit = 0.0
+
+            if used + total_days > limit:
+                return jsonify({'error': f'超過年度上限（已用 {used} 天，上限 {limit} 天）'}), 400
+
+        row = conn.execute("""
+            INSERT INTO leave_requests
+              (staff_id, leave_type_id, leave_type_name, start_date, end_date,
+               start_half, end_half, total_days, reason, proxy_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
+        """, (sid, leave_type_id, lt['name'], sd, ed,
+              start_half, end_half, total_days, reason, proxy_name)).fetchone()
+    return jsonify(leave_req_row(row)), 201
+
+
+@app.route('/api/leave/my-requests/<int:rid>', methods=['DELETE'])
+def api_leave_my_delete(rid):
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    with get_db() as conn:
+        req = conn.execute("SELECT * FROM leave_requests WHERE id=%s AND staff_id=%s", (rid, sid)).fetchone()
+        if not req: return ('', 404)
+        if req['status'] != 'pending':
+            return jsonify({'error': '已審核的申請無法撤銷'}), 400
+        conn.execute("DELETE FROM leave_requests WHERE id=%s", (rid,))
+    return jsonify({'deleted': rid})
+
+
+# ── Leave Balances (Employee) ────────────────────────────────────
+
+@app.route('/api/leave/my-balances', methods=['GET'])
+def api_leave_my_balances():
+    sid = session.get('punch_staff_id')
+    if not sid: return jsonify({'error': 'not logged in'}), 401
+    from datetime import date as _date3
+    year = int(request.args.get('year', _date3.today().year))
+    with get_db() as conn:
+        types = conn.execute(
+            "SELECT * FROM leave_types WHERE is_active=TRUE ORDER BY sort_order, id"
+        ).fetchall()
+        staff_row = conn.execute(
+            "SELECT hire_date FROM punch_staff WHERE id=%s", (sid,)
+        ).fetchone()
+        hire_date = staff_row['hire_date'] if staff_row else None
+
+        result = []
+        for lt in types:
+            used_row = conn.execute("""
+                SELECT COALESCE(SUM(total_days),0) as used
+                FROM leave_requests
+                WHERE staff_id=%s AND leave_type_id=%s
+                  AND EXTRACT(YEAR FROM start_date)=%s
+                  AND status != 'rejected'
+            """, (sid, lt['id'], year)).fetchone()
+            used = float(used_row['used']) if used_row else 0.0
+
+            limit = None
+            if lt['annual_limit'] is not None:
+                limit = float(lt['annual_limit'])
+            if lt['name'] == '特休假' and hire_date:
+                limit = float(_calc_annual_leave_days(hire_date))
+
+            result.append({
+                'leave_type_id':   lt['id'],
+                'leave_type_name': lt['name'],
+                'salary_rate':     float(lt['salary_rate']),
+                'annual_limit':    limit,
+                'limit_note':      lt['limit_note'],
+                'used_days':       used,
+                'remaining':       round(limit - used, 1) if limit is not None else None,
+            })
+    return jsonify({'year': year, 'balances': result})
+
+
+# ── Leave Requests (Admin) ───────────────────────────────────────
+
+@app.route('/api/leave/requests', methods=['GET'])
+@login_required
+def api_leave_admin_list():
+    status  = request.args.get('status','')
+    staff_id = request.args.get('staff_id','')
+    month   = request.args.get('month','')
+    conds, params = ['TRUE'], []
+    if status:   conds.append('lr.status=%s');                           params.append(status)
+    if staff_id: conds.append('lr.staff_id=%s');                         params.append(int(staff_id))
+    if month:    conds.append("to_char(lr.start_date,'YYYY-MM')=%s");    params.append(month)
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT lr.*, ps.name as staff_name
+            FROM leave_requests lr
+            JOIN punch_staff ps ON ps.id = lr.staff_id
+            WHERE {' AND '.join(conds)}
+            ORDER BY lr.created_at DESC LIMIT 300
+        """, params).fetchall()
+    return jsonify([leave_req_row(r) | {'staff_name': r['staff_name']} for r in rows])
+
+
+@app.route('/api/leave/requests/<int:rid>', methods=['PUT'])
+@login_required
+def api_leave_review(rid):
+    b           = request.get_json(force=True)
+    action      = b.get('action')       # 'approve' | 'reject'
+    reviewed_by = b.get('reviewed_by','').strip()
+    review_note = b.get('review_note','').strip()
+
+    if action not in ('approve','reject'):
+        return jsonify({'error': 'invalid action'}), 400
+
+    new_status = 'approved' if action == 'approve' else 'rejected'
+
+    with get_db() as conn:
+        row = conn.execute("""
+            UPDATE leave_requests SET status=%s, reviewed_by=%s, review_note=%s, reviewed_at=NOW()
+            WHERE id=%s RETURNING *
+        """, (new_status, reviewed_by, review_note, rid)).fetchone()
+        if not row: return ('', 404)
+
+        # Get staff LINE user id for notification
+        staff = conn.execute(
+            "SELECT name, line_user_id FROM punch_staff WHERE id=%s", (row['staff_id'],)
+        ).fetchone()
+
+    result = leave_req_row(row)
+    result['staff_name'] = staff['name'] if staff else ''
+
+    # Push LINE notification
+    if staff and staff.get('line_user_id'):
+        status_label = '核准' if action == 'approve' else '退回'
+        note_text = f'\n備註：{review_note}' if review_note else ''
+        msg = (
+            f'【請假申請{status_label}】\n'
+            f'假別：{row["leave_type_name"]}\n'
+            f'日期：{row["start_date"]} ~ {row["end_date"]}\n'
+            f'天數：{float(row["total_days"])} 天\n'
+            f'審核：{reviewed_by or "管理員"}{note_text}'
+        )
+        _send_line_punch(staff['line_user_id'], msg)
+
+    return jsonify(result)
+
+
+@app.route('/api/leave/requests/<int:rid>', methods=['DELETE'])
+@login_required
+def api_leave_admin_delete(rid):
+    with get_db() as conn:
+        conn.execute("DELETE FROM leave_requests WHERE id=%s", (rid,))
+    return jsonify({'deleted': rid})
+
+
+# ── Admin: all staff balances ────────────────────────────────────
+
+@app.route('/api/leave/balances', methods=['GET'])
+@login_required
+def api_leave_admin_balances():
+    from datetime import date as _date4
+    year = int(request.args.get('year', _date4.today().year))
+    with get_db() as conn:
+        staff_rows = conn.execute("""
+            SELECT id, name, hire_date FROM punch_staff
+            WHERE active=TRUE ORDER BY name
+        """).fetchall()
+        types = conn.execute(
+            "SELECT * FROM leave_types WHERE is_active=TRUE ORDER BY sort_order, id"
+        ).fetchall()
+
+        result = []
+        for s in staff_rows:
+            balances = []
+            for lt in types:
+                used_row = conn.execute("""
+                    SELECT COALESCE(SUM(total_days),0) as used
+                    FROM leave_requests
+                    WHERE staff_id=%s AND leave_type_id=%s
+                      AND EXTRACT(YEAR FROM start_date)=%s
+                      AND status != 'rejected'
+                """, (s['id'], lt['id'], year)).fetchone()
+                used = float(used_row['used']) if used_row else 0.0
+
+                limit = None
+                if lt['annual_limit'] is not None:
+                    limit = float(lt['annual_limit'])
+                if lt['name'] == '特休假' and s['hire_date']:
+                    limit = float(_calc_annual_leave_days(s['hire_date']))
+
+                balances.append({
+                    'leave_type_id':   lt['id'],
+                    'leave_type_name': lt['name'],
+                    'annual_limit':    limit,
+                    'used_days':       used,
+                    'remaining':       round(limit - used, 1) if limit is not None else None,
+                })
+            result.append({
+                'staff_id':   s['id'],
+                'staff_name': s['name'],
+                'hire_date':  s['hire_date'].isoformat() if s['hire_date'] else None,
+                'balances':   balances,
+            })
+    return jsonify({'year': year, 'staff': result, 'types': [leave_type_row(t) for t in types]})
+
 
 @app.route('/')
 def index():

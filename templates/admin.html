@@ -250,6 +250,7 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
     <a href="#" class="nav-item"        id="nav-punch"   onclick="showPage('punch',event)">打卡管理<span class="nav-badge" id="badge-punch" style="display:none"></span></a>
     <a href="#" class="nav-item"        id="nav-sched"   onclick="showPage('sched',event)">排班管理<span class="nav-badge" id="badge-sched" style="display:none"></span></a>
     <a href="#" class="nav-item"        id="nav-salary"  onclick="showPage('salary',event)">薪資管理</a>
+    <a href="#" class="nav-item"        id="nav-leave"   onclick="showPage('leave',event)">請假管理<span class="nav-badge" id="badge-leave" style="display:none"></span></a>
   </nav>
   <div class="sidebar-bottom">
     <a href="/admin/logout" class="logout-btn">登出系統</a>
@@ -1271,6 +1272,147 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
 
   <!-- ── 班別排班 ──────────────────────────── -->
 
+  <!-- ═══ LEAVE PAGE ═══ -->
+  <div class="page" id="page-leave" style="display:none">
+
+    <div class="inv-tab-bar">
+      <button class="inv-tab active" id="leavetab-requests" onclick="switchLeaveTab('requests')">請假申請審核</button>
+      <button class="inv-tab"        id="leavetab-types"    onclick="switchLeaveTab('types')">假別設定</button>
+      <button class="inv-tab"        id="leavetab-balances" onclick="switchLeaveTab('balances')">員工假別餘額</button>
+    </div>
+
+    <!-- 請假申請審核 -->
+    <div id="leave-panel-requests">
+      <div class="filter-bar" style="margin-bottom:16px;gap:10px;flex-wrap:wrap">
+        <span class="filter-label">月份</span>
+        <input class="filter-input" type="month" id="leave-filter-month" onchange="loadLeaveRequests()">
+        <span class="filter-label">狀態</span>
+        <select class="filter-input" id="leave-filter-status" onchange="loadLeaveRequests()" style="padding:6px 10px">
+          <option value="">全部</option>
+          <option value="pending" selected>待審核</option>
+          <option value="approved">已核准</option>
+          <option value="rejected">已退回</option>
+        </select>
+        <button class="btn btn-outline btn-sm" onclick="loadLeaveRequests()">重新整理</button>
+        <span id="leave-req-count" style="font-size:12px;color:var(--muted)"></span>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>員工</th><th>假別</th><th>開始日</th><th>結束日</th>
+              <th>天數</th><th>原因</th><th>代理人</th><th>申請時間</th><th>狀態</th><th>操作</th>
+            </tr></thead>
+            <tbody id="leave-req-tbody"><tr><td colspan="10" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 假別設定 -->
+    <div id="leave-panel-types" style="display:none">
+      <div class="section-head">
+        <span style="font-size:12px;color:var(--muted)">管理員可修改或新增假別</span>
+        <button class="btn btn-primary" onclick="openLeaveTypeModal()">新增假別</button>
+      </div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>假別名稱</th><th>薪資倍率</th><th>年度上限</th><th>備註</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="leave-types-tbody"><tr><td colspan="6" class="empty-state"><div class="empty-state-text">載入中...</div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 員工假別餘額 -->
+    <div id="leave-panel-balances" style="display:none">
+      <div class="filter-bar" style="margin-bottom:16px;gap:10px">
+        <span class="filter-label">年份</span>
+        <input class="filter-input" type="number" id="leave-bal-year" value="" style="width:90px" onchange="loadLeaveBalances()">
+        <button class="btn btn-outline btn-sm" onclick="loadLeaveBalances()">查詢</button>
+      </div>
+      <div id="leave-balances-wrap"></div>
+    </div>
+
+  </div><!-- end page-leave -->
+
+  <!-- Leave Type Modal -->
+  <div class="modal-overlay" id="leave-type-modal" style="display:none" onclick="if(event.target===this)closeLeaveTypeModal()">
+    <div class="modal" style="max-width:460px">
+      <div class="modal-header">
+        <span class="modal-title" id="leave-type-modal-title">新增假別</span>
+        <button class="modal-close" onclick="closeLeaveTypeModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="lt-id">
+        <div class="form-row">
+          <label class="form-label">假別名稱 *</label>
+          <input class="form-input" type="text" id="lt-name" placeholder="例：特休假">
+        </div>
+        <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label class="form-label">薪資倍率</label>
+            <select class="form-input" id="lt-rate">
+              <option value="1.0">全薪 (1.0x)</option>
+              <option value="0.5">半薪 (0.5x)</option>
+              <option value="0.0">無薪 (0.0x)</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">年度上限（天，留空=無上限）</label>
+            <input class="form-input" type="number" id="lt-limit" placeholder="留空表示無上限" min="0" step="0.5">
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="form-label">備註說明</label>
+          <input class="form-input" type="text" id="lt-note" placeholder="例：依勞基法計算">
+        </div>
+        <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label class="form-label">排序</label>
+            <input class="form-input" type="number" id="lt-sort" value="0" min="0">
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;padding-top:22px">
+            <input type="checkbox" id="lt-active" checked style="width:16px;height:16px">
+            <label for="lt-active" style="font-size:13px">啟用</label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeLeaveTypeModal()">取消</button>
+        <button class="btn btn-primary" onclick="saveLeaveType()">儲存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leave Review Modal -->
+  <div class="modal-overlay" id="leave-review-modal" style="display:none" onclick="if(event.target===this)closeLeaveReviewModal()">
+    <div class="modal" style="max-width:440px">
+      <div class="modal-header">
+        <span class="modal-title">審核請假申請</span>
+        <button class="modal-close" onclick="closeLeaveReviewModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="lr-id">
+        <div id="lr-info" style="background:var(--bg);border-radius:8px;padding:12px 16px;font-size:13px;margin-bottom:16px;line-height:1.8"></div>
+        <div class="form-row">
+          <label class="form-label">審核人</label>
+          <input class="form-input" type="text" id="lr-by" placeholder="請輸入審核人姓名">
+        </div>
+        <div class="form-row">
+          <label class="form-label">備註（可留空）</label>
+          <input class="form-input" type="text" id="lr-note" placeholder="退回原因或備注">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="closeLeaveReviewModal()">取消</button>
+        <button class="btn" style="background:#e53e3e;color:#fff" onclick="submitLeaveReview('reject')">退回</button>
+        <button class="btn btn-primary" onclick="submitLeaveReview('approve')">核准</button>
+      </div>
+    </div>
+  </div>
+
 
 </main>
 
@@ -1959,11 +2101,11 @@ function showPage(page, e) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-' + page).classList.add('active');
   setTimeout(refreshBadges, 600);
-  ['records','charts','summary','ocr','inv','punch','sched','salary'].forEach(p =>
+  ['records','charts','summary','ocr','inv','punch','sched','salary','leave'].forEach(p =>
     document.getElementById('page-' + p).style.display = p === page ? '' : 'none'
   );
   document.getElementById('page-title').textContent =
-    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理', sched: '排班管理', salary: '薪資管理' }[page];
+    { records: '每日記帳', charts: '圖表分析', summary: '欄位統計', ocr: 'AI 報帳辨識', inv: '庫存管理', punch: '打卡管理', sched: '排班管理', salary: '薪資管理', leave: '請假管理' }[page];
   document.getElementById('new-btn').style.display = page === 'records' ? '' : 'none';
   if (page === 'records') loadRecords();
   if (page === 'charts')  { initChartDefaults(); renderCharts(); }
@@ -1973,6 +2115,7 @@ function showPage(page, e) {
   if (page === 'punch')   initPunch();
   if (page === 'sched')   initSched();
   if (page === 'salary')  initSalary();
+  if (page === 'leave')   initLeave();
 }
 
 // ── Data ──────────────────────────────────────────────────────
@@ -5123,6 +5266,11 @@ async function refreshBadges() {
     ]);
     const schedCount = (Array.isArray(sr1)?sr1.length:0) + (Array.isArray(sr2)?sr2.length:0);
     setBadge('badge-sched', schedCount);
+
+    // Leave requests (請假申請) — pending
+    const lr = await fetch('/api/leave/requests?status=pending').then(r=>r.json()).catch(()=>[]);
+    const leaveCount = Array.isArray(lr) ? lr.length : 0;
+    setBadge('badge-leave', leaveCount);
   } catch(e) {
     // Silently fail — badges are informational only
   }
@@ -5723,6 +5871,247 @@ async function importFromGDrive() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 請假管理模組
+// ═══════════════════════════════════════════════════════════════
+
+let leaveTypes    = [];
+let leaveRequests = [];
+
+function initLeave() {
+  const now = new Date();
+  const m = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  document.getElementById('leave-filter-month').value = m;
+  document.getElementById('leave-bal-year').value = now.getFullYear();
+  switchLeaveTab('requests');
+}
+
+function switchLeaveTab(tab) {
+  ['requests','types','balances'].forEach(t => {
+    document.getElementById('leavetab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('leave-panel-' + t).style.display = t === tab ? '' : 'none';
+  });
+  if (tab === 'requests') loadLeaveRequests();
+  if (tab === 'types')    loadLeaveTypes();
+  if (tab === 'balances') loadLeaveBalances();
+}
+
+// ── Requests ──────────────────────────────────────────────────
+
+async function loadLeaveRequests() {
+  const month  = document.getElementById('leave-filter-month').value;
+  const status = document.getElementById('leave-filter-status').value;
+  let url = '/api/leave/requests?';
+  if (month)  url += `month=${month}&`;
+  if (status) url += `status=${status}&`;
+  const data = await fetch(url).then(r=>r.json()).catch(()=>[]);
+  leaveRequests = Array.isArray(data) ? data : [];
+  document.getElementById('leave-req-count').textContent = `共 ${leaveRequests.length} 筆`;
+  renderLeaveRequests();
+  // update badge
+  const pending = leaveRequests.filter(r=>r.status==='pending').length;
+  const badge = document.getElementById('badge-leave');
+  badge.textContent = pending;
+  badge.style.display = pending ? '' : 'none';
+}
+
+const LEAVE_STATUS_LABEL = { pending:'待審核', approved:'已核准', rejected:'已退回' };
+const LEAVE_STATUS_COLOR = { pending:'var(--gold)', approved:'var(--green)', rejected:'var(--red)' };
+
+function renderLeaveRequests() {
+  const tbody = document.getElementById('leave-req-tbody');
+  if (!leaveRequests.length) {
+    tbody.innerHTML = `<tr><td colspan="10" class="empty-state"><div class="empty-state-text">目前無請假申請</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = leaveRequests.map(r => {
+    const half = (r.start_half ? '（前半天）' : '') + (r.end_half ? '（後半天）' : '');
+    const statusColor = LEAVE_STATUS_COLOR[r.status] || 'var(--muted)';
+    const statusLabel = LEAVE_STATUS_LABEL[r.status] || r.status;
+    const actionBtn = r.status === 'pending'
+      ? `<button class="btn btn-outline btn-sm" onclick="openLeaveReviewModal(${r.id})">審核</button>`
+      : '';
+    const delBtn = `<button class="btn btn-sm" style="background:var(--red-light);color:var(--red);margin-left:4px" onclick="deleteLeaveRequest(${r.id})">刪除</button>`;
+    return `<tr>
+      <td>${r.staff_name || ''}</td>
+      <td>${r.leave_type_name}</td>
+      <td>${r.start_date}${r.start_half?' (半天)':''}</td>
+      <td>${r.end_date}${r.end_half?' (半天)':''}</td>
+      <td style="font-weight:700">${r.total_days}</td>
+      <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.reason||''}">${r.reason||'-'}</td>
+      <td>${r.proxy_name||'-'}</td>
+      <td style="font-size:11px;color:var(--muted)">${(r.created_at||'').slice(0,16)}</td>
+      <td><span style="color:${statusColor};font-weight:700;font-size:12px">${statusLabel}</span>${r.review_note?`<div style="font-size:11px;color:var(--muted)">${r.review_note}</div>`:''}</td>
+      <td>${actionBtn}${delBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+let currentLeaveReqId = null;
+
+function openLeaveReviewModal(id) {
+  const req = leaveRequests.find(r => r.id === id);
+  if (!req) return;
+  currentLeaveReqId = id;
+  document.getElementById('lr-id').value = id;
+  document.getElementById('lr-by').value = '';
+  document.getElementById('lr-note').value = '';
+  document.getElementById('lr-info').innerHTML = `
+    <div><b>員工：</b>${req.staff_name || ''}</div>
+    <div><b>假別：</b>${req.leave_type_name}</div>
+    <div><b>日期：</b>${req.start_date}${req.start_half?' (前半天)':''} ~ ${req.end_date}${req.end_half?' (後半天)':''}</div>
+    <div><b>天數：</b>${req.total_days} 天</div>
+    <div><b>代理人：</b>${req.proxy_name||'-'}</div>
+    <div><b>原因：</b>${req.reason||'-'}</div>
+  `;
+  document.getElementById('leave-review-modal').style.display = 'flex';
+}
+
+function closeLeaveReviewModal() {
+  document.getElementById('leave-review-modal').style.display = 'none';
+  currentLeaveReqId = null;
+}
+
+async function submitLeaveReview(action) {
+  const id   = currentLeaveReqId;
+  const by   = document.getElementById('lr-by').value.trim();
+  const note = document.getElementById('lr-note').value.trim();
+  if (!by) { showToast('請填寫審核人', 'error'); return; }
+  try {
+    const res = await fetch(`/api/leave/requests/${id}`, {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ action, reviewed_by: by, review_note: note })
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || '操作失敗', 'error'); return; }
+    showToast(action === 'approve' ? '已核准，已通知員工' : '已退回，已通知員工', 'success');
+    closeLeaveReviewModal();
+    loadLeaveRequests();
+  } catch { showToast('網路錯誤', 'error'); }
+}
+
+async function deleteLeaveRequest(id) {
+  if (!confirm('確定要刪除此請假記錄？')) return;
+  await fetch(`/api/leave/requests/${id}`, { method: 'DELETE' });
+  loadLeaveRequests();
+}
+
+// ── Leave Types ──────────────────────────────────────────────
+
+async function loadLeaveTypes() {
+  const data = await fetch('/api/leave/types').then(r=>r.json()).catch(()=>[]);
+  leaveTypes = Array.isArray(data) ? data : [];
+  renderLeaveTypes();
+}
+
+function renderLeaveTypes() {
+  const tbody = document.getElementById('leave-types-tbody');
+  if (!leaveTypes.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="empty-state-text">尚無假別設定</div></td></tr>`;
+    return;
+  }
+  const rateLabel = { '1': '全薪 (1.0x)', '0.5': '半薪 (0.5x)', '0': '無薪 (0.0x)' };
+  tbody.innerHTML = leaveTypes.map(lt => {
+    const rl = rateLabel[String(lt.salary_rate)] || `${lt.salary_rate}x`;
+    const limit = lt.annual_limit != null ? `${lt.annual_limit} 天` : '無上限';
+    return `<tr>
+      <td style="font-weight:700">${lt.name}</td>
+      <td>${rl}</td>
+      <td>${limit}</td>
+      <td style="color:var(--muted);font-size:12px">${lt.limit_note||''}</td>
+      <td><span style="color:${lt.is_active?'var(--green)':'var(--muted)'}">${lt.is_active?'啟用':'停用'}</span></td>
+      <td>
+        <button class="btn btn-outline btn-sm" onclick="openLeaveTypeModal(${lt.id})">編輯</button>
+        <button class="btn btn-sm" style="background:var(--red-light);color:var(--red);margin-left:4px" onclick="deleteLeaveType(${lt.id})">刪除</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function openLeaveTypeModal(id) {
+  const lt = id ? leaveTypes.find(t => t.id === id) : null;
+  document.getElementById('leave-type-modal-title').textContent = lt ? '編輯假別' : '新增假別';
+  document.getElementById('lt-id').value        = lt ? lt.id : '';
+  document.getElementById('lt-name').value      = lt ? lt.name : '';
+  document.getElementById('lt-rate').value      = lt ? String(lt.salary_rate) : '1.0';
+  document.getElementById('lt-limit').value     = lt && lt.annual_limit != null ? lt.annual_limit : '';
+  document.getElementById('lt-note').value      = lt ? lt.limit_note : '';
+  document.getElementById('lt-sort').value      = lt ? lt.sort_order : 0;
+  document.getElementById('lt-active').checked  = lt ? lt.is_active : true;
+  document.getElementById('leave-type-modal').style.display = 'flex';
+}
+
+function closeLeaveTypeModal() {
+  document.getElementById('leave-type-modal').style.display = 'none';
+}
+
+async function saveLeaveType() {
+  const id   = document.getElementById('lt-id').value;
+  const body = {
+    name:        document.getElementById('lt-name').value.trim(),
+    salary_rate: parseFloat(document.getElementById('lt-rate').value),
+    annual_limit: document.getElementById('lt-limit').value !== '' ? parseFloat(document.getElementById('lt-limit').value) : null,
+    limit_note:  document.getElementById('lt-note').value.trim(),
+    sort_order:  parseInt(document.getElementById('lt-sort').value) || 0,
+    is_active:   document.getElementById('lt-active').checked,
+  };
+  if (!body.name) { showToast('請填寫假別名稱', 'error'); return; }
+  const url    = id ? `/api/leave/types/${id}` : '/api/leave/types';
+  const method = id ? 'PUT' : 'POST';
+  try {
+    const res  = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || '儲存失敗', 'error'); return; }
+    showToast('儲存成功', 'success');
+    closeLeaveTypeModal();
+    loadLeaveTypes();
+  } catch { showToast('網路錯誤', 'error'); }
+}
+
+async function deleteLeaveType(id) {
+  if (!confirm('確定要刪除此假別？（已申請的記錄不受影響）')) return;
+  await fetch(`/api/leave/types/${id}`, { method: 'DELETE' });
+  loadLeaveTypes();
+}
+
+// ── Balances ─────────────────────────────────────────────────
+
+async function loadLeaveBalances() {
+  const year = document.getElementById('leave-bal-year').value || new Date().getFullYear();
+  const data = await fetch(`/api/leave/balances?year=${year}`).then(r=>r.json()).catch(()=>({}));
+  const wrap = document.getElementById('leave-balances-wrap');
+  if (!data.staff || !data.staff.length) {
+    wrap.innerHTML = '<div style="text-align:center;color:var(--muted);padding:24px">無員工資料</div>';
+    return;
+  }
+  const types = data.types || [];
+  wrap.innerHTML = `
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>員工</th>
+            ${types.map(t=>`<th style="font-size:12px">${t.name}<div style="font-size:10px;color:var(--muted);font-weight:400">${t.limit_note||''}</div></th>`).join('')}
+          </tr></thead>
+          <tbody>
+            ${data.staff.map(s=>`
+              <tr>
+                <td style="font-weight:700;white-space:nowrap">${s.staff_name}</td>
+                ${s.balances.map(b=>{
+                  const limitStr = b.annual_limit!=null ? `/${b.annual_limit}` : '/∞';
+                  const color = b.annual_limit != null && b.used_days >= b.annual_limit ? 'var(--red)' : 'inherit';
+                  return `<td style="text-align:center;font-size:13px;color:${color}">${b.used_days}<span style="color:var(--muted);font-size:11px">${limitStr}</span></td>`;
+                }).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 </script>

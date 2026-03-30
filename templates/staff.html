@@ -191,6 +191,7 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
       <button class="tab"        id="tab-overtime"      onclick="switchTab('overtime')">加班申請</button>
       <button class="tab"        id="tab-attendance"    onclick="switchTab('attendance')">出勤月曆</button>
       <button class="tab"        id="tab-salary"        onclick="switchTab('salary')">薪資查詢</button>
+      <button class="tab"        id="tab-leave"         onclick="switchTab('leave')">請假申請</button>
       </div>
 
       <!-- ── TAB: 打卡 ── -->
@@ -376,6 +377,54 @@ html,body{min-height:100%;background:var(--navy);font-family:"Noto Sans TC",sans
           <div style="text-align:center;color:var(--muted);font-size:13px;padding:16px">請選擇月份查詢薪資</div>
         </div>
       </div>
+      <!-- ── TAB: 請假申請 ── -->
+      <div id="panel-leave" class="tab-body" style="display:none">
+        <!-- Balances -->
+        <div id="leave-balance-wrap" style="margin-bottom:14px"></div>
+
+        <!-- Submit form -->
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px">
+          <div class="section-label" style="margin-bottom:12px">申請請假</div>
+          <div style="margin-bottom:10px">
+            <div class="fl">假別</div>
+            <select class="fi" id="lv-type" onchange="onLeaveTypeChange()">
+              <option value="">-- 選擇假別 --</option>
+            </select>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+            <div>
+              <div class="fl">開始日期</div>
+              <input class="fi" type="date" id="lv-start" onchange="calcLeaveDays()">
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:4px">
+                <input type="checkbox" id="lv-start-half" onchange="calcLeaveDays()"> 半天
+              </label>
+            </div>
+            <div>
+              <div class="fl">結束日期</div>
+              <input class="fi" type="date" id="lv-end" onchange="calcLeaveDays()">
+              <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);margin-top:4px">
+                <input type="checkbox" id="lv-end-half" onchange="calcLeaveDays()"> 半天
+              </label>
+            </div>
+          </div>
+          <div id="lv-days-preview" style="font-size:13px;color:var(--accent);font-weight:700;margin-bottom:10px;min-height:18px"></div>
+          <div style="margin-bottom:10px">
+            <div class="fl">請假原因</div>
+            <input class="fi" type="text" id="lv-reason" placeholder="請填寫原因">
+          </div>
+          <div style="margin-bottom:12px">
+            <div class="fl">代理人姓名</div>
+            <input class="fi" type="text" id="lv-proxy" placeholder="請填寫代理人">
+          </div>
+          <button class="btn btn-primary" style="width:100%;padding:12px;font-size:14px" onclick="submitLeaveRequest()">送出申請</button>
+          <div id="lv-err" style="color:var(--red);font-size:13px;margin-top:8px;min-height:16px"></div>
+        </div>
+
+        <!-- My requests list -->
+        <div class="section-label" style="margin-bottom:8px">我的請假記錄</div>
+        <div id="my-leave-list"></div>
+      </div>
+
     </div><!-- end main card -->
   </div><!-- end screen-main -->
 </div><!-- end wrap -->
@@ -473,7 +522,7 @@ function showMain(){
 }
 
 function switchTab(tab){
-  ['punch','sched','schedule-view','overtime','attendance','salary'].forEach(t=>{
+  ['punch','sched','schedule-view','overtime','attendance','salary','leave'].forEach(t=>{
     document.getElementById('tab-'+t).classList.toggle('active',t===tab);
     document.getElementById('panel-'+t).style.display=t===tab?'':'none';
   });
@@ -496,6 +545,7 @@ function switchTab(tab){
   if(tab==='overtime')   initOTTab();
   if(tab==='attendance') initAttendanceTab();
   if(tab==='salary')   initSalaryTab();
+  if(tab==='leave')    initLeaveTab();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1306,6 +1356,161 @@ async function loadMyOTRequests() {
       </div>
     </div>`;
   }).join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 請假申請模組
+// ═══════════════════════════════════════════════════════════════
+
+let leaveTypesStaff = [];
+let myLeaveRequests = [];
+
+async function initLeaveTab() {
+  await loadLeaveTypesStaff();
+  await loadMyLeaveRequests();
+  await loadMyLeaveBalances();
+  // Set today as default start/end
+  const today = new Date().toISOString().slice(0,10);
+  if (!document.getElementById('lv-start').value) document.getElementById('lv-start').value = today;
+  if (!document.getElementById('lv-end').value)   document.getElementById('lv-end').value   = today;
+  calcLeaveDays();
+}
+
+async function loadLeaveTypesStaff() {
+  const data = await fetch('/api/leave/types').then(r=>r.json()).catch(()=>[]);
+  leaveTypesStaff = (Array.isArray(data) ? data : []).filter(t=>t.is_active);
+  const sel = document.getElementById('lv-type');
+  sel.innerHTML = '<option value="">-- 選擇假別 --</option>' +
+    leaveTypesStaff.map(t=>`<option value="${t.id}">${t.name}（${t.limit_note||''}）</option>`).join('');
+}
+
+async function loadMyLeaveBalances() {
+  const year = new Date().getFullYear();
+  const data = await fetch(`/api/leave/my-balances?year=${year}`).then(r=>r.json()).catch(()=>({}));
+  const wrap = document.getElementById('leave-balance-wrap');
+  if (!data.balances || !data.balances.length) { wrap.innerHTML=''; return; }
+  const items = data.balances.map(b => {
+    const limitStr = b.annual_limit != null ? b.annual_limit : '∞';
+    const remaining = b.annual_limit != null ? b.remaining : '無上限';
+    const color = b.annual_limit != null && b.used_days >= b.annual_limit ? 'var(--red)' : 'var(--navy)';
+    return `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span>${b.leave_type_name}</span>
+      <span style="color:${color};font-weight:700">已用${b.used_days}/${limitStr}天（剩餘：${remaining !== '無上限' ? remaining+'天' : '無上限'}）</span>
+    </div>`;
+  }).join('');
+  wrap.innerHTML = `<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:4px">
+    <div class="section-label" style="margin-bottom:8px">${year} 年假別餘額</div>
+    ${items}
+  </div>`;
+}
+
+function onLeaveTypeChange() { calcLeaveDays(); }
+
+function calcLeaveDays() {
+  const start = document.getElementById('lv-start').value;
+  const end   = document.getElementById('lv-end').value;
+  const sh    = document.getElementById('lv-start-half').checked;
+  const eh    = document.getElementById('lv-end-half').checked;
+  const preview = document.getElementById('lv-days-preview');
+  if (!start || !end) { preview.textContent=''; return; }
+  const sd = new Date(start), ed = new Date(end);
+  if (ed < sd) { preview.textContent='結束日期不可早於開始日期'; return; }
+  let total = 0;
+  const cur = new Date(sd);
+  while (cur <= ed) {
+    if (cur.getDay() !== 0) { // exclude Sunday
+      let val = 1;
+      if (cur.toISOString().slice(0,10) === start && sh) val = 0.5;
+      else if (cur.toISOString().slice(0,10) === end && eh) val = 0.5;
+      total += val;
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  preview.textContent = `預計請假 ${total} 天（已排除週日）`;
+}
+
+async function submitLeaveRequest() {
+  const typeId = document.getElementById('lv-type').value;
+  const start  = document.getElementById('lv-start').value;
+  const end    = document.getElementById('lv-end').value;
+  const sh     = document.getElementById('lv-start-half').checked;
+  const eh     = document.getElementById('lv-end-half').checked;
+  const reason = document.getElementById('lv-reason').value.trim();
+  const proxy  = document.getElementById('lv-proxy').value.trim();
+  const errEl  = document.getElementById('lv-err');
+  errEl.textContent = '';
+
+  if (!typeId) { errEl.textContent='請選擇假別'; return; }
+  if (!start || !end) { errEl.textContent='請填寫日期'; return; }
+  if (!reason) { errEl.textContent='請填寫請假原因'; return; }
+  if (!proxy)  { errEl.textContent='請填寫代理人'; return; }
+
+  try {
+    const res = await fetch('/api/leave/my-requests', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ leave_type_id: parseInt(typeId), start_date: start, end_date: end,
+                             start_half: sh, end_half: eh, reason, proxy_name: proxy })
+    });
+    const data = await res.json();
+    if (!res.ok) { errEl.textContent = data.error || '送出失敗'; return; }
+    errEl.style.color = 'var(--green)';
+    errEl.textContent = '申請已送出，等待主管審核';
+    // Reset
+    document.getElementById('lv-type').value = '';
+    document.getElementById('lv-reason').value = '';
+    document.getElementById('lv-proxy').value = '';
+    document.getElementById('lv-start-half').checked = false;
+    document.getElementById('lv-end-half').checked = false;
+    document.getElementById('lv-days-preview').textContent = '';
+    await loadMyLeaveRequests();
+    await loadMyLeaveBalances();
+  } catch { errEl.textContent = '網路錯誤，請重試'; }
+}
+
+async function loadMyLeaveRequests() {
+  const data = await fetch('/api/leave/my-requests').then(r=>r.json()).catch(()=>[]);
+  myLeaveRequests = Array.isArray(data) ? data : [];
+  renderMyLeaveRequests();
+}
+
+function renderMyLeaveRequests() {
+  const wrap = document.getElementById('my-leave-list');
+  if (!myLeaveRequests.length) {
+    wrap.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:12px">尚無請假記錄</div>';
+    return;
+  }
+  const STATUS_COLOR = { pending:'#f6ad55', approved:'#48bb78', rejected:'#e53e3e' };
+  const STATUS_LABEL = { pending:'待審核', approved:'已核准', rejected:'已退回' };
+  wrap.innerHTML = myLeaveRequests.map(r => {
+    const sc = STATUS_COLOR[r.status] || 'var(--muted)';
+    const sl = STATUS_LABEL[r.status] || r.status;
+    const cancelBtn = r.status === 'pending'
+      ? `<button onclick="cancelLeaveRequest(${r.id})" style="font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--red);cursor:pointer">撤銷</button>`
+      : '';
+    return `<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-weight:700;color:var(--navy)">${r.leave_type_name}</span>
+        <span style="color:${sc};font-weight:700;font-size:12px">${sl}</span>
+      </div>
+      <div style="font-size:13px;color:var(--text);margin-bottom:2px">${r.start_date}${r.start_half?' (半天)':''} ～ ${r.end_date}${r.end_half?' (半天)':''}</div>
+      <div style="font-size:13px;color:var(--muted)">共 <b>${r.total_days}</b> 天｜代理：${r.proxy_name||'-'}｜原因：${r.reason||'-'}</div>
+      ${r.review_note?`<div style="font-size:12px;color:${sc};margin-top:4px">審核意見：${r.review_note}</div>`:''}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+        <span style="font-size:11px;color:var(--muted)">${(r.created_at||'').slice(0,16)}</span>
+        ${cancelBtn}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function cancelLeaveRequest(id) {
+  if (!confirm('確定要撤銷此請假申請？')) return;
+  const res = await fetch(`/api/leave/my-requests/${id}`, { method: 'DELETE' });
+  if (res.ok) {
+    await loadMyLeaveRequests();
+    await loadMyLeaveBalances();
+  }
 }
 
 </script>
