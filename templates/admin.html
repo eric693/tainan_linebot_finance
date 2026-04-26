@@ -2122,6 +2122,11 @@ function showPage(page, e) {
 async function loadRecords() {
   try {
     const res = await fetch('/api/records');
+    if (res.redirected || res.url.includes('/admin/login')) {
+      window.location.href = '/admin/login';
+      return;
+    }
+    if (!res.ok) { showToast('載入失敗 (' + res.status + ')', 'error'); return; }
     allRecords = await res.json();
     applyFilter();
   } catch { showToast('載入失敗', 'error'); }
