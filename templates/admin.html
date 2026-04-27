@@ -1033,11 +1033,18 @@ tbody td.date-cell { font-family: 'Noto Sans TC', sans-serif; font-weight: 500; 
             <!-- Preview -->
             <div style="margin-top:12px;padding:12px;background:var(--bg);border-radius:8px">
               <div style="font-size:11px;color:var(--muted);margin-bottom:8px">選單預覽</div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;max-width:280px">
+              <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:4px;max-width:320px">
                 <div style="padding:12px;border-radius:6px;background:#2e9e6b;color:#fff;text-align:center;font-size:12px;font-weight:700">上班打卡</div>
+                <a id="rm-staff-preview-btn" href="#" target="_blank" style="padding:10px 8px;border-radius:6px;background:#1a2a4a;color:#fff;text-align:center;font-size:11px;font-weight:700;text-decoration:none;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;min-width:44px">員工系統</a>
                 <div style="padding:12px;border-radius:6px;background:#d64242;color:#fff;text-align:center;font-size:12px;font-weight:700">下班打卡</div>
                 <div style="padding:12px;border-radius:6px;background:#e07b2a;color:#fff;text-align:center;font-size:12px;font-weight:700">休息開始</div>
+                <div></div>
                 <div style="padding:12px;border-radius:6px;background:#4a7bda;color:#fff;text-align:center;font-size:12px;font-weight:700">休息結束</div>
+              </div>
+              <div style="margin-top:10px;padding:8px 10px;background:#fff;border-radius:6px;border:1px solid var(--border)">
+                <div style="font-size:11px;font-weight:700;color:var(--navy);margin-bottom:4px">員工系統連結</div>
+                <div style="font-family:'DM Mono',monospace;font-size:11px;color:var(--accent);word-break:break-all" id="rm-staff-url">載入中...</div>
+                <div style="font-size:10px;color:var(--muted);margin-top:4px">點擊圖文選單中央「員工系統」時開啟此網址（建立選單時自動套用）</div>
               </div>
               <div style="font-size:10px;color:var(--muted);margin-top:6px">點擊後自動送出打卡指令，若需 GPS 驗證會提示傳送位置</div>
             </div>
@@ -4329,6 +4336,9 @@ async function loadLinePunchConfig() {
   // Webhook URL
   const host = window.location.origin;
   document.getElementById('lp-webhook-url').textContent = host + '/line-punch/webhook';
+  const staffUrl = host + '/staff';
+  document.getElementById('rm-staff-url').textContent = staffUrl;
+  document.getElementById('rm-staff-preview-btn').href = staffUrl;
   await loadLinePunchStaff();
 }
 
