@@ -3070,7 +3070,7 @@ function renderInvRecipes() {
   }
   wrap.innerHTML = invRecipeList.map(r => {
     const maxBatches = r.items.length
-      ? Math.floor(Math.min(...r.items.map(it => it.current_stock / it.quantity)))
+      ? Math.floor(Math.min(...r.items.map(it => it.current_stock * (it.unit_size || 1) / it.quantity)))
       : 0;
     const hasCost = r.items.some(it => it.unit_cost > 0);
     const ingRows = r.items.map(it => {
@@ -3223,12 +3223,13 @@ function openProduceModal(rid, rname, yld) {
   document.getElementById('pm-ing-preview').innerHTML =
     '<div style="margin-top:12px">' +
     r.items.map(it => {
-      const need = it.quantity * batchesVal;
+      // 用量以最小單位輸入，須除以 unit_size 換算回進貨單位才能跟庫存比較
+      const need = it.quantity / (it.unit_size || 1) * batchesVal;
       const ok   = it.current_stock >= need;
       return `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
         <span>${escHtml(it.name)}</span>
         <span style="font-family:'DM Mono',monospace;color:${ok?'var(--text)':'var(--red)'}">
-          ${need} ${escHtml(it.unit_label)} <span style="color:var(--muted)">(現有 ${it.current_stock})</span>
+          ${(+need.toFixed(2))} ${escHtml(it.unit_label)} <span style="color:var(--muted)">(現有 ${it.current_stock})</span>
         </span>
       </div>`;
     }).join('') +

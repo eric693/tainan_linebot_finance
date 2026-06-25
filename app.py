@@ -1485,7 +1485,10 @@ def recipe_with_items(conn, recipe_id):
     for r in items:
         qty       = float(r['quantity'])
         unit_cost = float(r['unit_cost'])
-        line_cost = qty * unit_cost
+        unit_size = float(r['unit_size']) or 1
+        # 用量(qty)以最小單位(如 ml/克)輸入，unit_cost 為每進貨單位(如 瓶/包)成本，
+        # 需先換算成「每最小單位成本」(unit_cost/unit_size) 再乘用量
+        line_cost = qty * unit_cost / unit_size
         total_batch_cost += line_cost
         item_list.append({
             'item_id':          r['item_id'],
@@ -1561,21 +1564,22 @@ def api_inv_recipe_produce(recipe_id):
     staff  = b.get('staff','')
     with get_db() as conn:
         items = conn.execute("""
-            SELECT ri.quantity, i.id as item_id, i.name, i.current_stock, i.unit_label
+            SELECT ri.quantity, i.id as item_id, i.name, i.current_stock, i.unit_label, i.unit_size
             FROM inv_recipe_items ri JOIN inv_items i ON i.id=ri.item_id
             WHERE ri.recipe_id=%s
         """, (recipe_id,)).fetchall()
+        # 用量以最小單位輸入，庫存以進貨單位計，需除以 unit_size 換算回進貨單位
         # Check stock
         shortages = []
         for it in items:
-            needed = float(it['quantity']) * batches
+            needed = float(it['quantity']) / (float(it['unit_size']) or 1) * batches
             if float(it['current_stock']) < needed:
                 shortages.append({'name':it['name'],'needed':needed,'available':float(it['current_stock'])})
         if shortages:
             return jsonify({'error':'庫存不足','shortages':shortages}), 422
         # Deduct
         for it in items:
-            needed = float(it['quantity']) * batches
+            needed = float(it['quantity']) / (float(it['unit_size']) or 1) * batches
             conn.execute("UPDATE inv_items SET current_stock=current_stock-%s,updated_at=NOW() WHERE id=%s",
                          (needed, it['item_id']))
             conn.execute("INSERT INTO inv_transactions (item_id,txn_type,quantity,note,staff,recipe_id) VALUES (%s,'produce',%s,%s,%s,%s)",
