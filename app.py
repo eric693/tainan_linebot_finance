@@ -2078,7 +2078,9 @@ def api_punch_record_manual():
         row = conn.execute("""
             INSERT INTO punch_records
               (staff_id, punch_type, punched_at, note, is_manual, manual_by)
-            VALUES (%s,%s,%s,%s,TRUE,%s) RETURNING *
+            VALUES (%s, %s,
+                    (%s::timestamp AT TIME ZONE 'Asia/Taipei'),
+                    %s, TRUE, %s) RETURNING *
         """, (staff_id, punch_type, punched_at, note, manual_by)).fetchone()
         staff = conn.execute("SELECT name FROM punch_staff WHERE id=%s",(staff_id,)).fetchone()
     d = punch_record_row(row)
@@ -2092,7 +2094,9 @@ def api_punch_record_update(rid):
     with get_db() as conn:
         row = conn.execute("""
             UPDATE punch_records
-            SET punch_type=%s, punched_at=%s, note=%s, is_manual=TRUE, manual_by=%s
+            SET punch_type=%s,
+                punched_at=(%s::timestamp AT TIME ZONE 'Asia/Taipei'),
+                note=%s, is_manual=TRUE, manual_by=%s
             WHERE id=%s RETURNING *
         """, (b.get('punch_type'), b.get('punched_at'),
               b.get('note',''), b.get('manual_by',''), rid)).fetchone()
@@ -3175,6 +3179,52 @@ def api_sal_records_month(month):
             result.append(d)
     return jsonify(result)
 
+def _calc_punch_hours(conn, staff_id, month):
+    """
+    Sum actual worked hours from punch records for a month.
+    Returns (total_hours, day_count). Days missing an in/out pair are skipped.
+    """
+    rows = conn.execute("""
+        SELECT punch_type,
+               punched_at AT TIME ZONE 'Asia/Taipei' as punched_tw
+        FROM punch_records
+        WHERE staff_id = %s
+          AND to_char(punched_at AT TIME ZONE 'Asia/Taipei', 'YYYY-MM') = %s
+        ORDER BY punched_at ASC
+    """, (staff_id, month)).fetchall()
+
+    from collections import defaultdict
+    daily = defaultdict(dict)
+    for r in rows:
+        dt = r['punched_tw']
+        ds = dt.strftime('%Y-%m-%d')
+        pt = r['punch_type']
+        if pt == 'in' and 'in' not in daily[ds]:
+            daily[ds]['in'] = dt
+        elif pt == 'out':
+            daily[ds]['out'] = dt
+        elif pt == 'break_out' and 'break_out' not in daily[ds]:
+            daily[ds]['break_out'] = dt
+        elif pt == 'break_in' and 'break_in' not in daily[ds]:
+            daily[ds]['break_in'] = dt
+
+    total_hours, days = 0.0, 0
+    for ds, times in daily.items():
+        if 'in' not in times or 'out' not in times:
+            continue
+        total_secs = (times['out'] - times['in']).total_seconds()
+        if 'break_out' in times and 'break_in' in times:
+            break_secs = (times['break_in'] - times['break_out']).total_seconds()
+            if 0 < break_secs < 7200:
+                total_secs -= break_secs
+        worked = total_secs / 3600
+        if worked <= 0:
+            continue
+        total_hours += worked
+        days += 1
+    return round(total_hours, 2), days
+
+
 def _calc_overtime(conn, staff_id, month, base_salary, daily_hours, ot_rate1, ot_rate2):
     """
     Calculate overtime pay for a staff member in a given month.
@@ -3316,6 +3366,12 @@ def api_sal_generate(month):
                             (staff['id'], month)
                         ).fetchall()
                         total_hours = sum(float(r['hours']) for r in shift_rows)
+                        src_note = f'共{len(shift_rows)}班'
+                        # 沒有排班資料時，改用實際打卡紀錄計算工時
+                        if total_hours <= 0:
+                            total_hours, punch_days = _calc_punch_hours(
+                                conn, staff['id'], month)
+                            src_note = f'打卡{punch_days}天'
                         if total_hours > 0:
                             base_pay = round(total_hours * h_rate, 0)
                             items_data.append({
@@ -3323,7 +3379,7 @@ def api_sal_generate(month):
                                 'component_name': '排班時薪',
                                 'comp_type': 'allowance',
                                 'amount': base_pay,
-                                'note': f'{total_hours:.1f}h × {h_rate:.0f}元/時（共{len(shift_rows)}班）'
+                                'note': f'{total_hours:.1f}h × {h_rate:.0f}元/時（{src_note}）'
                             })
                 except Exception as _sh_e:
                     print(f"[SHIFT PAY] {staff['name']}: {_sh_e}")
@@ -4132,8 +4188,11 @@ def api_punch_req_submit():
 
     with get_db() as conn:
         row = conn.execute("""
-            INSERT INTO punch_requests (staff_id, punch_type, requested_at, reason)
-            VALUES (%s, %s, %s, %s) RETURNING *
+            INSERT INTO punch_requests (staff_id, punch_type,
+                                        requested_at, reason)
+            VALUES (%s, %s,
+                    (%s::timestamp AT TIME ZONE 'Asia/Taipei'),
+                    %s) RETURNING *
         """, (sid, punch_type, requested_at, reason)).fetchone()
     return jsonify(punch_req_row(row)), 201
 
